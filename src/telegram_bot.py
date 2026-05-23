@@ -73,7 +73,7 @@ def _estimate_kb(
                     f"🤖 Модель: {model_label}", callback_data="model:menu"
                 ),
             ],
-            [InlineKeyboardButton("❌ Отмена", callback_data="cancel")],
+            [InlineKeyboardButton("Отмена", callback_data="cancel")],
         ]
     )
 
@@ -578,6 +578,7 @@ def main() -> None:  # pragma: no cover — сетевой запуск, про�
         CallbackQueryHandler,
         CommandHandler,
         MessageHandler,
+        PicklePersistence,
         filters,
     )
 
@@ -594,7 +595,16 @@ def main() -> None:  # pragma: no cover — сетевой запуск, про�
         )
 
     h = build_handlers(cfg, wl)
-    app = Application.builder().token(token).post_init(_post_init).build()
+    state_dir = cfg.base_dir / ".state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    persistence = PicklePersistence(filepath=state_dir / "bot.pickle")
+    app = (
+        Application.builder()
+        .token(token)
+        .persistence(persistence)
+        .post_init(_post_init)
+        .build()
+    )
     app.add_handler(CommandHandler("start", h["start"]))
     app.add_handler(CommandHandler("help", h["help"]))
     app.add_handler(CommandHandler("go", h["go"]))

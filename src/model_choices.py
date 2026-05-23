@@ -28,7 +28,7 @@ class ModelChoice:
 CHOICES: dict[str, ModelChoice] = {
     "gpt_med": ModelChoice(
         key="gpt_med",
-        label="💰 GPT-2 medium ~$0.05",
+        label="GPT-2 medium ~$0.05",
         provider=Provider.OPENAI,
         model="gpt-image-2",
         quality="medium",
@@ -36,7 +36,7 @@ CHOICES: dict[str, ModelChoice] = {
     ),
     "gpt_high": ModelChoice(
         key="gpt_high",
-        label="🎯 GPT-2 high ~$0.17",
+        label="GPT-2 high ~$0.17",
         provider=Provider.OPENAI,
         model="gpt-image-2",
         quality="high",
@@ -44,7 +44,7 @@ CHOICES: dict[str, ModelChoice] = {
     ),
     "nano_flash": ModelChoice(
         key="nano_flash",
-        label="⚡ Nano Banana 2 ~$0.04",
+        label="Nano Banana 2 ~$0.04",
         provider=Provider.GEMINI,
         model="gemini-3.1-flash-image-preview",
         quality="",
@@ -53,7 +53,7 @@ CHOICES: dict[str, ModelChoice] = {
     ),
     "nano_pro": ModelChoice(
         key="nano_pro",
-        label="🎨 Nano Banana Pro ~$0.13",
+        label="Nano Banana Pro ~$0.13",
         provider=Provider.GEMINI,
         model="gemini-3-pro-image-preview",
         quality="",
