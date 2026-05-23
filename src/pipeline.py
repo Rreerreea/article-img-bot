@@ -112,23 +112,51 @@ class PipelineService:
         slot_id: str,
         instruction: str,
         choice: ModelChoice | None = None,
+        slot: ImageSlot | None = None,
+        preset: str | None = None,
     ) -> Path | None:
-        """Правка уже сгенерированной картинки (Фича 15).
+        """Правка картинки.
 
-        Источник истины — output/<slot_id>.png (последний результат).
-        Размер сохраняем как у исходника. None — если картинки нет.
+        Стратегия:
+        - Если модель умеет img2img (Gemini Nano Banana) — нативная правка,
+          композиция сохраняется почти идеально.
+        - Если не умеет (OpenAI) — перегенерация: к исходному промпту слота
+          приклеивается инструкция-правка, модель рисует заново. Композиция
+          может уехать, но изменение применится. Нужен slot+preset для
+          реконструкции промпта.
+
+        None — если картинки нет или нет данных для перегенерации.
         """
-        from . import postprocess
+        from . import postprocess, prompt_builder
 
         src = self.cfg.output_dir / f"{slot_id}.png"
         if not src.exists():
             return None
-        from PIL import Image
 
-        size = Image.open(src).size
         worker = self._worker_for(choice)
-        data = await worker.edit_image(src.read_bytes(), instruction)
-        data = postprocess.normalize(data, size)
+
+        # Нативная правка (img2img) если умеет модель — лучше композиция.
+        if choice is not None and choice.supports_edit:
+            from PIL import Image
+            size = Image.open(src).size
+            data = await worker.edit_image(src.read_bytes(), instruction)
+            data = postprocess.normalize(data, size)
+            src.write_bytes(data)
+            return src
+
+        # Фолбэк: перегенерация с инструкцией в промпте.
+        if slot is None:
+            return None  # без слота не восстановим контекст
+        base_spec = prompt_builder.build(slot, self.cfg.refs_dir, preset)
+        merged_prompt = (
+            f"{base_spec.prompt}\n\n"
+            f"Also apply this change: {instruction}. "
+            "Keep the overall structure and existing text unchanged unless "
+            "the change explicitly requests otherwise."
+        )
+        new_spec = dataclasses.replace(base_spec, prompt=merged_prompt)
+        data = await worker._generate(slot, new_spec)
+        data = postprocess.normalize(data, new_spec.target_size)
         src.write_bytes(data)
         return src
 
