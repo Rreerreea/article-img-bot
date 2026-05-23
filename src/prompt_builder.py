@@ -64,15 +64,11 @@ def refs_signature(folder: Path) -> str:
     return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
-def _has_cyrillic(text: str) -> bool:
-    return any("Ѐ" <= ch <= "ӿ" for ch in text)
-
-
 def build_prompt(slot: ImageSlot, preset: str | None = None) -> str:
     """Сильный промпт: модель рисует ВЕСЬ текст сама.
 
-    Язык НЕ зашит — детектится по содержимому, чтобы EN-статья не
-    рендерилась с русскими подписями и наоборот.
+    Промпт языко-нейтральный — что прислали, то и рендерим (русский,
+    английский, испанский, любой). Никаких хардкодов про язык.
     """
     style = presets.get(preset)
     if slot.type is SlotType.INFOGRAPHIC:
@@ -81,20 +77,6 @@ def build_prompt(slot: ImageSlot, preset: str | None = None) -> str:
         blocks = "\n".join(
             f"{i}. {b.strip()}" for i, b in enumerate(slot.bullets, 1)
         )
-        # Язык подсказываем модели по факту: смешанные кейсы (en+ru) тоже ок.
-        sample = f"{title}\n{blocks}"
-        if _has_cyrillic(sample):
-            lang_hint = (
-                "Preserve the language of the text exactly as given — keep "
-                "Cyrillic where Cyrillic is given. All Cyrillic letters must "
-                "be crisp and accurate (no fake letters, no transliteration)."
-            )
-        else:
-            lang_hint = (
-                "Preserve the language of the text exactly as given — keep "
-                "Latin where Latin is given. All Latin letters must be crisp "
-                "and accurate (no fake characters)."
-            )
         title_line = (
             f"Prominent title at the top: «{title}».\n" if title else ""
         )
@@ -105,11 +87,12 @@ def build_prompt(slot: ImageSlot, preset: str | None = None) -> str:
             "a distinctive custom thematic illustration (cryptocurrency, "
             "tokens, blockchain, finance motifs), rich and polished — NOT "
             "generic clipart, NOT cluttered.\n"
-            "Render EXACTLY the text below, perfectly spelled, fully "
-            "legible, no typos, no distorted or fake letters, no gibberish — "
-            "each numbered item is one block caption:\n"
+            "Render EXACTLY the text below — same language, same script, "
+            "same characters as given. Do NOT translate, do NOT transliterate. "
+            "Perfectly spelled, fully legible, no typos, no distorted or fake "
+            "letters, no gibberish — each numbered item is one block caption:\n"
             f"{blocks}\n"
-            f"{lang_hint} No extra text. "
+            "All text must be crisp and accurate. No extra text. "
             "Sharp, professional, magazine-grade quality."
         )
     # Сюжетная: образная иллюстрация по смыслу (текст не нужен).

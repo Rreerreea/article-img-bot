@@ -313,22 +313,27 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             if choice.supports_edit else
             "перегенерирую с твоей правкой"
         )
-        await message.reply_text(f"«{slot_id}» — {mode_hint}…")
+        sec = choice.time_per_image_sec
+        eta = f"~{sec} сек" if sec < 90 else f"~{round(sec / 60)} мин"
+        status = await message.reply_text(
+            f"«{slot_id}» — {mode_hint} · {eta}\n▱  0 из 1"
+        )
         try:
             path = await service.edit(
                 slot_id, instruction,
                 choice=choice, slot=slot, preset=preset,
             )
         except Exception as exc:  # noqa: BLE001 — дружелюбное сообщение
-            return await message.reply_text(
+            return await status.edit_text(
                 f"Не получилось поправить ({type(exc).__name__}). "
                 "Попробуй другую формулировку."
             )
         if path is None:
-            return await message.reply_text(
+            return await status.edit_text(
                 f"Не могу найти картинку «{slot_id}» или контекст слота. "
                 "Сгенерируй пачку заново."
             )
+        await status.edit_text(f"«{slot_id}» готов: ▰  1 из 1")
         await message.reply_document(
             document=open(path, "rb"),
             filename=f"{slot_id}.png",
