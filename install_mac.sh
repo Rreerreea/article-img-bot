@@ -1,29 +1,15 @@
 #!/bin/bash
-# Установка бота на мак (для друга). Запуск: bash install_mac.sh
-# Делает: (если надо — клонирует репо) + venv + зависимости + автозапуск.
+# Установка бота на мак: venv + зависимости + автозапуск (LaunchAgent).
+# Предполагается, что код уже в текущей папке (install.command выше делает клон).
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
 echo "==> Проверки"
-command -v python3 >/dev/null || { echo "Нет python3. Поставь Python 3 с python.org и запусти снова."; exit 1; }
+command -v python3 >/dev/null || { echo "Нет python3. Поставь Xcode Command Line Tools: xcode-select --install"; exit 1; }
 [ -f .env ] || { echo "ОШИБКА: нет файла .env с ключами рядом со скриптом."; exit 1; }
-
-# Дуальный режим:
-# 1) папка уже содержит код (Гошина машина или повторный запуск) — пропускаем clone
-# 2) рядом только install + .env (свежая распаковка у друга) — клонируем с github
-if [ ! -d src ]; then
-  echo "==> Скачиваю код с GitHub..."
-  command -v git >/dev/null || { echo "Нет git. Поставь Xcode Command Line Tools: xcode-select --install"; exit 1; }
-  TMP="$(mktemp -d)"
-  git clone --depth 1 https://github.com/Rreerreea/article-img-bot.git "$TMP/repo"
-  shopt -s dotglob
-  mv "$TMP/repo"/* .
-  mv "$TMP/repo"/.git .
-  shopt -u dotglob
-  rm -rf "$TMP"
-fi
+[ -d src ] || { echo "ОШИБКА: папки src/ нет — установка делается через install.command (он сам подтянет код)."; exit 1; }
 
 echo "==> Окружение (venv + зависимости, ~1-2 мин)"
 python3 -m venv .venv
