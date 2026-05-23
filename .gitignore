@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.cache/
+.state/
+output/
+result.zip
+refs/
+bot.log
+.DS_Store
