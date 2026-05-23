@@ -98,10 +98,13 @@ def _style_kb(current: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _edit_kb(ids: list[str], context) -> InlineKeyboardMarkup | None:
+def _edit_kb(
+    ids: list[str], context, supports_edit: bool = True
+) -> InlineKeyboardMarkup | None:
     """Кнопки правки по слотам. Длинные id мапим через user_data
-    (callback_data лимит 64 байта)."""
-    if not ids:
+    (callback_data лимит 64 байта). Скрываем целиком, если модель
+    не умеет править — кнопки бы вели в ошибку."""
+    if not ids or not supports_edit:
         return None
     cmap = {str(i): sid for i, sid in enumerate(ids)}
     context.user_data["edit_map"] = cmap
@@ -209,9 +212,19 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             preset = _preset(update)
             choice = _choice(update)
             total = len(slots)
+            model_name = choice.label.split(" ~")[0]
+
+            def _fmt_eta(remaining: int) -> str:
+                import math
+                batches = max(1, math.ceil(remaining / max(1, cfg.concurrency)))
+                sec = batches * choice.time_per_image_sec
+                if sec < 90:
+                    return f"~{sec} сек"
+                return f"~{round(sec / 60)} мин"
+
             init_text = (
-                f"🎨 Генерирую через {choice.label}…\n"
-                f"{'▱' * total}  0 из {total}"
+                f"Генерирую через {model_name}\n"
+                f"{'▱' * total}  0 из {total} · {_fmt_eta(total)}"
             )
             if q:
                 status = await q.edit_message_text(init_text)
@@ -224,10 +237,15 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 if done != last["n"]:
                     last["n"] = done
                     bar = "▰" * done + "▱" * (tot - done)
+                    remaining = max(0, tot - done)
+                    suffix = (
+                        f" · осталось {_fmt_eta(remaining)}"
+                        if remaining else ""
+                    )
                     try:
                         await status.edit_text(
-                            f"🎨 Генерирую через {choice.label}…\n"
-                            f"{bar}  {done} из {tot}"
+                            f"Генерирую через {model_name}\n"
+                            f"{bar}  {done} из {tot}{suffix}"
                         )
                     except Exception:  # noqa: BLE001 — троттлинг Telegram
                         pass
@@ -261,7 +279,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 caption="📦 Оригиналы без сжатия — в архиве.",
             )
             ids = [r.slot_id for r in ok]
-            kb = _edit_kb(ids, context)
+            kb = _edit_kb(ids, context, supports_edit=choice.supports_edit)
             if kb:
                 await chat_msg.reply_text(
                     "Поправить картинку? Выбери:", reply_markup=kb
@@ -284,9 +302,22 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
 
     # ---- правка (общая для кнопки и /edit) -------------------------------
 
-    async def _do_edit(message, slot_id: str, instruction: str):
+    async def _do_edit(update, message, slot_id: str, instruction: str):
+        choice = _choice(update)
+        if not choice.supports_edit:
+            return await message.reply_text(
+                f"Текущая модель ({choice.label.split(' ~')[0]}) пока не умеет "
+                "править готовую картинку. Переключи на Nano Banana 2 или Pro "
+                "через «🤖 Модель» и попробуй ещё раз."
+            )
         await message.reply_text(f"Правлю «{slot_id}»…")
-        path = await service.edit(slot_id, instruction)
+        try:
+            path = await service.edit(slot_id, instruction, choice=choice)
+        except Exception as exc:  # noqa: BLE001 — дружелюбное сообщение
+            return await message.reply_text(
+                f"Не получилось поправить ({type(exc).__name__}). "
+                "Попробуй другую формулировку или переключи модель."
+            )
         if path is None:
             return await message.reply_text(
                 f"Нет картинки «{slot_id}». Сначала сгенерируй."
@@ -306,7 +337,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         awaiting = context.user_data.get("awaiting_edit")
         if awaiting and msg.text and not msg.text.startswith("/"):
             context.user_data["awaiting_edit"] = None
-            return await _do_edit(msg, awaiting, msg.text.strip())
+            return await _do_edit(update, msg, awaiting, msg.text.strip())
 
         choice = _choice(update)
         try:
@@ -421,7 +452,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 else "Сначала сгенерируй картинки.",
                 reply_markup=kb,
             )
-        await _do_edit(update.message, args[0], " ".join(args[1:]))
+        await _do_edit(update, update.message, args[0], " ".join(args[1:]))
 
     async def on_callback(update, context):
         q = update.callback_query

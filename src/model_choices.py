@@ -22,7 +22,9 @@ class ModelChoice:
     model: str
     quality: str       # для OpenAI; для Gemini игнорируется
     price_per_image: float
+    time_per_image_sec: int = 30  # примерное время на одну картинку
     needs_gemini: bool = False  # скрывать, если нет GEMINI_API_KEY
+    supports_edit: bool = False  # умеет ли модель править готовую картинку
 
 
 CHOICES: dict[str, ModelChoice] = {
@@ -33,6 +35,7 @@ CHOICES: dict[str, ModelChoice] = {
         model="gpt-image-2",
         quality="medium",
         price_per_image=0.053,
+        time_per_image_sec=40,
     ),
     "gpt_high": ModelChoice(
         key="gpt_high",
@@ -41,6 +44,7 @@ CHOICES: dict[str, ModelChoice] = {
         model="gpt-image-2",
         quality="high",
         price_per_image=0.167,
+        time_per_image_sec=80,
     ),
     "nano_flash": ModelChoice(
         key="nano_flash",
@@ -49,7 +53,9 @@ CHOICES: dict[str, ModelChoice] = {
         model="gemini-3.1-flash-image-preview",
         quality="",
         price_per_image=0.04,
+        time_per_image_sec=15,
         needs_gemini=True,
+        supports_edit=True,
     ),
     "nano_pro": ModelChoice(
         key="nano_pro",
@@ -58,7 +64,9 @@ CHOICES: dict[str, ModelChoice] = {
         model="gemini-3-pro-image-preview",
         quality="",
         price_per_image=0.134,
+        time_per_image_sec=60,
         needs_gemini=True,
+        supports_edit=True,
     ),
 }
 

@@ -107,7 +107,12 @@ class PipelineService:
             return []
         return sorted(p.stem for p in d.glob("*.png"))
 
-    async def edit(self, slot_id: str, instruction: str) -> Path | None:
+    async def edit(
+        self,
+        slot_id: str,
+        instruction: str,
+        choice: ModelChoice | None = None,
+    ) -> Path | None:
         """Правка уже сгенерированной картинки (Фича 15).
 
         Источник истины — output/<slot_id>.png (последний результат).
@@ -121,7 +126,8 @@ class PipelineService:
         from PIL import Image
 
         size = Image.open(src).size
-        data = await self.worker.edit_image(src.read_bytes(), instruction)
+        worker = self._worker_for(choice)
+        data = await worker.edit_image(src.read_bytes(), instruction)
         data = postprocess.normalize(data, size)
         src.write_bytes(data)
         return src

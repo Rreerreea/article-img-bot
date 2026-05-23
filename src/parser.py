@@ -14,7 +14,7 @@ import re
 from .classifier import classify_type
 from .models import ImageSlot
 
-MARKER = re.compile(r"^\s*Рис\.\s?(.*)$")
+MARKER = re.compile(r"^\s*(?:Рис|Fig|Figure|Pic|Image)\.?\s?(.*)$", re.IGNORECASE)
 # Буллет в начале строки: • (docx/HTML), -, *, ·, –, — (Markdown/Docs).
 # Обычные абзацы так не начинаются — границу блока не размывает.
 BULLET_LINE = re.compile(r"^[•\-\*·–—]\s+(.*)$")

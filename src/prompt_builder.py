@@ -23,7 +23,9 @@ from . import presets
 from .models import ImageSlot, SlotType
 
 TARGET_SIZE: dict[SlotType, tuple[int, int]] = {
-    SlotType.INFOGRAPHIC: (1280, 720),  # широкая — перечни данных
+    # 3:2 — близко к нативным OpenAI 1536x1024 и Gemini, постпроцесс
+    # не режет содержимое; раньше 1280x720 (16:9) обрезал низ инфографик.
+    SlotType.INFOGRAPHIC: (1536, 1024),
     SlotType.STORY: (1024, 1024),       # квадрат — образная сцена
 }
 
