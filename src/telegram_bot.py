@@ -65,17 +65,17 @@ def _ref_count(folder: Path) -> int:
 
 
 def _estimate_kb(
-    n: int, preset_label: str, model_label: str
+    n: int, style_label: str, model_label: str
 ) -> InlineKeyboardMarkup:
-    # Стиль временно скрыт из UI (Гоша зафиксировал 2026-05-25). Код /style
-    # и presets.py живут — при необходимости вернуть кнопку, раскомментировать
-    # ниже строку «🎨 Стиль:».
+    # «Стиль» теперь = выбор какой категории рефов использовать для генерации.
+    # Старый текстовый пресет-механизм (presets.py) переименован внутренне,
+    # тут оверрайдит slot.category одним выбором на всю пачку.
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(f"🚀 Запустить ({n})", callback_data="go")],
-            # [InlineKeyboardButton(
-            #     f"🎨 Стиль: {preset_label}", callback_data="style:menu"
-            # )],
+            [InlineKeyboardButton(
+                f"🎨 Стиль: {style_label}", callback_data="style:menu"
+            )],
             [
                 InlineKeyboardButton(
                     f"🤖 Модель: {model_label}", callback_data="model:menu"
@@ -96,13 +96,22 @@ def _model_kb(current: str, has_gemini: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _style_kb(current: str) -> InlineKeyboardMarkup:
+def _style_kb_refs(current: str, categories: list[str]) -> InlineKeyboardMarkup:
+    """Меню выбора «стиля» = категории рефов, которая будет
+    использоваться для всей генерации.
+    """
     rows = []
-    for name, p in presets.PRESETS.items():
-        mark = "✓ " if name == current else ""
-        rows.append(
-            [InlineKeyboardButton(mark + p.label, callback_data=f"style:{name}")]
-        )
+    auto_mark = "✓ " if current == "auto" else ""
+    rows.append([InlineKeyboardButton(
+        f"{auto_mark}🪄 Авто (по содержимому статьи)",
+        callback_data="style:auto",
+    )])
+    for c in categories:
+        mark = "✓ " if c == current else ""
+        label = CATEGORY_LABELS.get(c, f"📁 {c}")
+        rows.append([InlineKeyboardButton(
+            mark + label, callback_data=f"style:{c}"
+        )])
     return InlineKeyboardMarkup(rows)
 
 
@@ -163,10 +172,18 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
     state = ChatState(cfg.base_dir / ".state" / "chat.json")
 
     def _preset(update) -> str:
+        # Текстовый пресет сейчас всегда дефолт (UI скрыт).
+        return presets.DEFAULT
+
+    def _ref_style(update) -> str:
+        """Текущий выбор «стиля» в чате = категория рефов или 'auto'."""
         chat = update.effective_chat
-        return presets.canon(
-            state.get(chat.id, "preset", presets.DEFAULT) if chat else None
-        )
+        return state.get(chat.id, "ref_style", "auto") if chat else "auto"
+
+    def _ref_style_label(name: str) -> str:
+        if name == "auto":
+            return "Авто"
+        return CATEGORY_LABELS.get(name, f"📁 {name}")
 
     def _choice_key(update) -> str:
         chat = update.effective_chat
@@ -268,6 +285,14 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         try:
             preset = _preset(update)
             choice = _choice(update)
+            # Применяем оверрайд категории рефов (выбран в кнопке «🎨 Стиль»).
+            style_name = _ref_style(update)
+            if style_name and style_name != "auto":
+                import dataclasses
+                slots = [
+                    dataclasses.replace(s, category=style_name) for s in slots
+                ]
+                context.user_data["slots"] = slots  # синк с persistence
             total = len(slots)
             model_name = choice.label.split(" ~")[0]
 
@@ -503,26 +528,21 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             )
 
         context.user_data["slots"] = slots
-        label = presets.get(_preset(update)).label
+        style_name = _ref_style(update)
+        style_label = _ref_style_label(style_name)
         m_label = choice.label
         await msg.reply_text(
-            f"{est.human()}\n🤖 Модель: {m_label}",
-            reply_markup=_estimate_kb(len(slots), label, m_label),
+            f"{est.human()}\n🎨 Стиль: {style_label}\n🤖 Модель: {m_label}",
+            reply_markup=_estimate_kb(len(slots), style_label, m_label),
         )
 
     async def on_style(update, context):
         if not _guarded(update, wl):
             return await _deny(update)
-        chat = update.effective_chat
-        arg = context.args[0].strip().lower() if context.args else ""
-        if arg in presets.PRESETS:
-            state.set(chat.id, "preset", arg)
-            return await update.message.reply_text(
-                f"Стиль: {presets.PRESETS[arg].label}. "
-                "Действует со следующей генерации."
-            )
+        cats = list(_list_categories().keys())
         await update.message.reply_text(
-            "Выбери стиль:", reply_markup=_style_kb(_preset(update))
+            "Какую категорию рефов использовать для всей пачки?",
+            reply_markup=_style_kb_refs(_ref_style(update), cats),
         )
 
     def _list_refs(kind: str) -> list[Path]:
@@ -619,25 +639,29 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 "Отменено. Пришли статью заново, когда будешь готов."
             )
         if data == "style:menu":
+            cats = list(_list_categories().keys())
             return await q.edit_message_text(
-                "Выбери стиль:", reply_markup=_style_kb(_preset(update))
+                "Какую категорию рефов использовать для всей пачки?",
+                reply_markup=_style_kb_refs(_ref_style(update), cats),
             )
         if data.startswith("style:"):
-            name = presets.canon(data.split(":", 1)[1])
-            state.set(update.effective_chat.id, "preset", name)
+            raw = data.split(":", 1)[1]
+            # «auto» — спец-значение, иначе должна быть существующая категория.
+            if raw != "auto" and not _category_exists(raw):
+                return await q.edit_message_text(
+                    "Этой категории уже нет. Попробуй ещё раз через /refs."
+                )
+            state.set(update.effective_chat.id, "ref_style", raw)
+            style_label = _ref_style_label(raw)
             n = len(context.user_data.get("slots") or [])
-            label = presets.PRESETS[name].label
             m_label = _choice(update).label
-            # Стиль скрыт из UI, но /style и callback оставлены рабочими
-            # для совместимости со старыми диалогами (где смета ещё имела
-            # кнопку стиля до релиза 2026-05-25).
             if n:
                 return await q.edit_message_text(
-                    f"🤖 Модель: {m_label}",
-                    reply_markup=_estimate_kb(n, label, m_label),
+                    f"🎨 Стиль: {style_label}\n🤖 Модель: {m_label}",
+                    reply_markup=_estimate_kb(n, style_label, m_label),
                 )
             return await q.edit_message_text(
-                f"Стиль: {label}. Пришли статью — посчитаю смету."
+                f"Стиль: {style_label}. Пришли статью — посчитаю смету."
             )
         if data == "model:menu":
             return await q.edit_message_text(
@@ -649,11 +673,11 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             state.set(update.effective_chat.id, "model", key)
             choice_obj = model_choices.get(key)
             n = len(context.user_data.get("slots") or [])
-            label = presets.get(_preset(update)).label
+            style_label = _ref_style_label(_ref_style(update))
             if n:
                 return await q.edit_message_text(
-                    f"🤖 Модель: {choice_obj.label}",
-                    reply_markup=_estimate_kb(n, label, choice_obj.label),
+                    f"🎨 Стиль: {style_label}\n🤖 Модель: {choice_obj.label}",
+                    reply_markup=_estimate_kb(n, style_label, choice_obj.label),
                 )
             return await q.edit_message_text(
                 f"Модель: {choice_obj.label}. Пришли статью — посчитаю смету."
