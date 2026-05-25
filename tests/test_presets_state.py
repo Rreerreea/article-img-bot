@@ -51,13 +51,13 @@ def cfg(tmp_path) -> Config:
     )
 
 
-async def test_preset_invalidates_cache(cfg):
+async def test_preset_estimate_no_cache(cfg):
+    """Кэш вырезан 2026-05-25 — смета всегда показывает полную генерацию."""
     slot = ImageSlot("t", "ТОКЕНЫ", ("BNB",), SlotType.INFOGRAPHIC)
     w = HiggsfieldWorker(cfg)
 
     await w.generate_one(slot, preset="flat")
-    # Тот же слот, другой пресет — кэш не подходит, нужна перегенерация.
-    assert w.estimate([slot], preset="flat").cached == 1
+    assert w.estimate([slot], preset="flat").cached == 0
     assert w.estimate([slot], preset="dark").cached == 0
 
 

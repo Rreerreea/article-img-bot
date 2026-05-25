@@ -43,13 +43,14 @@ async def test_generate_one_creates_file(cfg, slot):
     assert res.file_path.name == "tokens.png"
 
 
-async def test_second_run_hits_cache(cfg, slot):
+async def test_second_run_regenerates_no_cache(cfg, slot):
+    """Кэш вырезан 2026-05-25 — каждый прогон должен генерить свежее."""
     w = HiggsfieldWorker(cfg)
     first = await w.generate_one(slot)
     second = await w.generate_one(slot)
 
     assert first.status is GenStatus.OK
-    assert second.status is GenStatus.FROM_CACHE  # API не дёргали повторно
+    assert second.status is GenStatus.OK  # не FROM_CACHE, всегда свежее
     assert second.file_path.exists()
 
 
@@ -69,7 +70,8 @@ async def test_batch_all_ok(cfg):
     assert all(r.ok for r in results)
 
 
-async def test_estimate_counts_cache(cfg, slot):
+async def test_estimate_no_cache(cfg, slot):
+    """Кэш вырезан — смета всегда полная (cached=0)."""
     w = HiggsfieldWorker(cfg)
 
     before = w.estimate([slot])
@@ -78,9 +80,9 @@ async def test_estimate_counts_cache(cfg, slot):
     assert before.to_generate == 1
     assert before.approx_cost_usd == pytest.approx(0.05)
 
-    await w.generate_one(slot)  # теперь слот в кэше
+    await w.generate_one(slot)
 
     after = w.estimate([slot])
-    assert after.cached == 1
-    assert after.to_generate == 0
-    assert after.approx_cost_usd == pytest.approx(0.0)
+    assert after.cached == 0
+    assert after.to_generate == 1
+    assert after.approx_cost_usd == pytest.approx(0.05)

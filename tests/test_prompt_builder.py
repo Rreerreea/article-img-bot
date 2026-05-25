@@ -67,23 +67,24 @@ def cfg(tmp_path) -> Config:
     )
 
 
-async def test_changing_refs_invalidates_cache(cfg):
-    """Ключевое требование: сменил рефы — кэш промахнулся — перегенерация."""
+async def test_estimate_always_full_no_cache(cfg):
+    """Кэш вырезан 2026-05-25 — смета всегда показывает полную генерацию,
+    независимо от прошлых прогонов и изменения рефов."""
     w = HiggsfieldWorker(cfg)
     slot = _infographic()
 
     res = await w.generate_one(slot)
     assert res.status.value == "ok"
-    assert w.estimate([slot]).cached == 1  # теперь в кэше
+    assert w.estimate([slot]).cached == 0
+    assert w.estimate([slot]).to_generate == 1
 
-    # Заказчик залил рефы в refs/infographic/ — сигнатура изменилась.
     refs = cfg.refs_dir / "infographic"
     refs.mkdir(parents=True, exist_ok=True)
     (refs / "brand.png").write_bytes(b"ref-bytes")
 
     est = w.estimate([slot])
-    assert est.cached == 0          # старый кэш больше не подходит
-    assert est.to_generate == 1     # будет перегенерация под новые рефы
+    assert est.cached == 0
+    assert est.to_generate == 1
 
 
 async def test_generated_file_matches_target_size(cfg):

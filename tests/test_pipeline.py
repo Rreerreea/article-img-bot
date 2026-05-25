@@ -74,11 +74,12 @@ async def test_run_builds_zip_with_all_images(cfg):
     assert all(n.endswith(".png") for n in names)
 
 
-async def test_rerun_uses_cache(cfg):
+async def test_rerun_regenerates(cfg):
+    """Кэш вырезан 2026-05-25 — повторный прогон даёт свежие OK, не FROM_CACHE."""
     svc = PipelineService(cfg)
     slots, _ = svc.prepare(FIXTURE)
     await svc.run(slots)
 
-    again = await svc.run(slots)  # второй прогон — всё из кэша, API не тронут
-    assert again.from_cache == 3
-    assert again.ok == 0
+    again = await svc.run(slots)
+    assert again.from_cache == 0
+    assert again.ok == 3

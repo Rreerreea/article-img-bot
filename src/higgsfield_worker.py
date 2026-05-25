@@ -75,16 +75,14 @@ class HiggsfieldWorker:
     async def generate_one(
         self, slot: ImageSlot, preset: str | None = None
     ) -> GenerationResult:
-        """Один слот: кэш -> (генерация с ретраями) -> нормализация -> output/."""
-        spec = prompt_builder.build(slot, self.cfg.refs_dir, preset)
-        key = slot.cache_key(spec.refs_signature)
-        cache_file = self._cache_ns(preset) / f"{key}.png"
-        out_file = self.cfg.output_dir / f"{slot.id}.png"
+        """Один слот: генерация с ретраями -> нормализация -> output/.
 
-        # Кэш-хит: API не трогаем (экономия, TZ 7.7б).
-        if cache_file.exists():
-            shutil.copyfile(cache_file, out_file)
-            return GenerationResult(slot.id, GenStatus.FROM_CACHE, out_file)
+        Кэш вырезан 2026-05-25 (Гоша зафиксировал — слишком часто отдавал
+        старые картинки вместо честной регенерации). Если когда-нибудь
+        захочется вернуть — `_cache_ns()` и `cache_key()` остались.
+        """
+        spec = prompt_builder.build(slot, self.cfg.refs_dir, preset)
+        out_file = self.cfg.output_dir / f"{slot.id}.png"
 
         last_error: Exception | None = None
         for attempt in range(1, self.cfg.max_retries + 2):  # 1 попытка + ретраи
@@ -95,8 +93,7 @@ class HiggsfieldWorker:
                 # только инфографика (у сюжетных текста нет).
                 if self.cfg.text_overlay and slot.type is SlotType.INFOGRAPHIC:
                     data = text_overlay.render(data, slot, spec.target_size)
-                cache_file.write_bytes(data)
-                shutil.copyfile(cache_file, out_file)
+                out_file.write_bytes(data)
                 return GenerationResult(
                     slot.id, GenStatus.OK, out_file, attempts=attempt
                 )
@@ -161,19 +158,13 @@ class HiggsfieldWorker:
     def estimate(
         self, slots: list[ImageSlot], preset: str | None = None
     ) -> Estimate:
-        """Смета до запуска (TZ 7.7в). Кэш-хиты бесплатны и в счёт не идут."""
-        cached = 0
-        ns = self._cache_ns(preset)
-        for s in slots:
-            spec = prompt_builder.build(s, self.cfg.refs_dir, preset)
-            if (ns / f"{s.cache_key(spec.refs_signature)}.png").exists():
-                cached += 1
-        to_generate = len(slots) - cached
+        """Смета до запуска. Кэш отключён — все слоты будут сгенерены."""
+        total = len(slots)
         return Estimate(
-            total=len(slots),
-            cached=cached,
-            to_generate=to_generate,
-            approx_cost_usd=to_generate * self.cfg.price_per_image,
+            total=total,
+            cached=0,
+            to_generate=total,
+            approx_cost_usd=total * self.cfg.price_per_image,
         )
 
     # ---- внутреннее ------------------------------------------------------
