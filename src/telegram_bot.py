@@ -298,8 +298,15 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             return await (q.edit_message_text(txt) if q
                           else update.message.reply_text(txt))
         if context.user_data.get("running"):
+            user_id = update.effective_user.id if update.effective_user else "?"
+            log.warning(
+                "running=True блокирует Go (user=%s) — возможно залипший флаг",
+                user_id,
+            )
             return await chat_msg.reply_text(
-                "Уже генерю, подожди — пришлю, как будет готово."
+                "Уже генерю, подожди — пришлю, как будет готово.\n"
+                "Если ничего не приходит больше 5 минут — нажми /start, "
+                "это сбросит залипший флаг."
             )
 
         context.user_data["running"] = True
@@ -920,6 +927,16 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
 
 async def _post_init(app):  # pragma: no cover — сетевое
     from telegram import BotCommand
+
+    # СБРОС залипших running-флагов после краша/OOM-killa: если процесс
+    # был убит во время генерации, finally не отработал и user_data[running]
+    # остался True в pickle — юзер навечно лочится. Чистим у всех.
+    cleared = 0
+    for chat_id, data in list(app.user_data.items()):
+        if data.pop("running", None):
+            cleared += 1
+    if cleared:
+        log.warning("Сбросил залипший running у %d чатов на старте", cleared)
 
     await app.bot.set_my_commands(
         [
