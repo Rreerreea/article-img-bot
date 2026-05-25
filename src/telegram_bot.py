@@ -1023,6 +1023,18 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
     async def on_error(update, context):
         err = getattr(context, "error", None)
         log.exception("Unhandled bot error: %s", err, exc_info=err)
+        # Глушим спам типичных Telegram-ошибок которые юзеру не помогут:
+        # эти сообщения только бесят и не дают что предпринять.
+        if err is not None:
+            txt = str(err).lower()
+            if (
+                "query is too old" in txt
+                or "query id is invalid" in txt
+                or "message is not modified" in txt
+                or "message to edit not found" in txt
+                or "message can't be edited" in txt
+            ):
+                return
         tgt = getattr(update, "effective_message", None)
         if tgt:
             try:
