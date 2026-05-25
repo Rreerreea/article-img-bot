@@ -8,10 +8,21 @@ UX: inline-кнопки (смета→«Запустить», стиль, пра
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
+
+# Логи в stdout → systemd journal. Видны: journalctl -u article-img-bot -f
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
+log = logging.getLogger("bot")
 
 from telegram import (
     InlineKeyboardButton,
@@ -344,11 +355,24 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                             f"Генерирую через {model_name}\n"
                             f"{bar}  {done} из {tot}{suffix}"
                         )
-                    except Exception:  # noqa: BLE001 — троттлинг Telegram
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        log.debug("progress edit failed (likely throttle): %s", exc)
 
+            user_id = update.effective_user.id if update.effective_user else "?"
+            log.info(
+                "gen start user=%s slots=%d model=%s style=%s",
+                user_id, total, choice.label, style_name,
+            )
             result = await service.run(slots, preset=preset,
                                        progress_cb=progress, choice=choice)
+            log.info(
+                "gen done user=%s ok=%d cached=%d failed=%d zip=%s",
+                user_id, result.ok, result.from_cache, result.failed,
+                bool(result.zip_path),
+            )
+            for r in result.results:
+                if r.error:
+                    log.warning("slot %s failed: %s", r.slot_id, r.error)
 
             if result.zip_path is None:
                 return await status.edit_text(
@@ -367,8 +391,8 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 if media:
                     try:
                         await chat_msg.reply_media_group(media=media)
-                    except Exception:  # noqa: BLE001 — не критично, есть ZIP
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("media_group failed: %s", exc)
             # Архив документом — оригиналы без сжатия.
             await chat_msg.reply_document(
                 document=open(result.zip_path, "rb"),
@@ -526,9 +550,11 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                         text=txt, preset=_preset(update), choice=choice
                     )
         except Exception as exc:  # noqa: BLE001 — дружелюбно, не стектрейс
+            log.exception("on_article: failed to load/parse")
             return await msg.reply_text(
-                "Не смог обработать это 😕 Причина: "
-                f"{type(exc).__name__}. Пришли статью файлом или ссылкой."
+                "Не смог обработать это 😕 "
+                f"{type(exc).__name__}: {str(exc)[:200]}\n"
+                "Пришли статью файлом или ссылкой."
             )
 
         if not slots:
@@ -863,14 +889,19 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             )
 
     async def on_error(update, context):
+        err = getattr(context, "error", None)
+        log.exception("Unhandled bot error: %s", err, exc_info=err)
         tgt = getattr(update, "effective_message", None)
         if tgt:
             try:
+                msg = type(err).__name__ if err else "unknown"
+                detail = str(err)[:120] if err else ""
                 await tgt.reply_text(
-                    "Что-то пошло не так 😕 Попробуй ещё раз или /start."
+                    f"Что-то пошло не так ({msg}). {detail}\n"
+                    "Попробуй ещё раз или /start."
                 )
             except Exception:  # noqa: BLE001
-                pass
+                log.exception("on_error: failed to notify user")
 
     return {
         "start": start, "help": on_help, "go": on_go, "article": on_article,
