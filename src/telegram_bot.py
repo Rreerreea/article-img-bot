@@ -163,6 +163,9 @@ def _refs_kb(counts: dict[str, int]) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(
         "➕ Новая категория", callback_data="refs:newcat"
     )])
+    rows.append([InlineKeyboardButton(
+        "✅ Готово", callback_data="refs:close"
+    )])
     return InlineKeyboardMarkup(rows)
 
 
@@ -571,10 +574,14 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
 
     async def _show_refs_list(q, kind: str) -> None:
         files = _list_refs(kind)
-        label = "инфографики" if kind == "infographic" else "сюжета"
+        label = _category_label(kind)
+        back_kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+            "« Назад к рефам", callback_data="refs:back"
+        )]])
         if not files:
             return await q.message.reply_text(
-                f"Пусто. Пришли фото — спрошу куда сохранить."
+                f"{label}: пусто. Пришли фото — спрошу куда сохранить.",
+                reply_markup=back_kb,
             )
         await q.message.reply_text(
             f"Все рефы {label} ({len(files)} шт):"
@@ -589,6 +596,9 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 await q.message.reply_photo(
                     photo=fh, caption=f"#{i} · {f.name}", reply_markup=kb
                 )
+        await q.message.reply_text(
+            "Это всё. Вернуться к категориям?", reply_markup=back_kb
+        )
 
     async def on_ref_photo(update, context):
         if not _guarded(update, wl):
@@ -749,6 +759,22 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 "(Рис. + заголовок + буллеты). Я перерисую те же картинки "
                 "с новым текстом."
             )
+        if data == "refs:back":
+            counts = _list_categories()
+            lines = ["📸 Твои рефы:"]
+            for name in (
+                ["infographic", "story"]
+                + sorted(k for k in counts if k not in SYSTEM_CATEGORIES)
+            ):
+                if name in counts:
+                    lines.append(f"• {_category_label(name)}: {counts[name]}")
+            lines.append("")
+            lines.append("Тапни категорию — покажу рефы с удалением.")
+            return await q.message.reply_text(
+                "\n".join(lines), reply_markup=_refs_kb(counts)
+            )
+        if data == "refs:close":
+            return await q.edit_message_text("Окей, закрыл.")
         if data == "refs:newcat":
             _clear_awaiting(context, keep="awaiting_new_category")
             context.user_data["awaiting_new_category"] = True
