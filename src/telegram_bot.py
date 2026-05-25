@@ -19,11 +19,23 @@ from telegram import (
     InputMediaPhoto,
 )
 
-from . import model_choices, presets
+from . import model_choices, presets, translator
 from .config import Config
 from .pipeline import PipelineService
 from .state import ChatState
 from .whitelist import Whitelist
+
+# Языки для авто-перевода кнопками после ZIP. Код → лейбл для UI и
+# инструкции переводчику ("Translate to English", "испанский" и т.п.)
+TRANSLATE_LANGS = [
+    ("en", "🇬🇧 English"),
+    ("ru", "🇷🇺 Русский"),
+    ("es", "🇪🇸 Español"),
+    ("de", "🇩🇪 Deutsch"),
+    ("fr", "🇫🇷 Français"),
+    ("zh", "🇨🇳 中文"),
+]
+LANG_LABELS = dict(TRANSLATE_LANGS)
 
 ARTICLE_EXT = {".docx", ".md", ".txt"}
 IMG_EXT = {".png", ".jpg", ".jpeg", ".webp"}
@@ -752,6 +764,20 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 "Шли ещё фото — спрошу куда. Список — /refs."
             )
         if data == "translate":
+            # Меню языков. Авто-перевод по тапу + резервный «свой файл».
+            rows = []
+            for code, label in TRANSLATE_LANGS:
+                rows.append([InlineKeyboardButton(
+                    label, callback_data=f"tr:{code}"
+                )])
+            rows.append([InlineKeyboardButton(
+                "📝 Свой перевод файлом", callback_data="tr:manual"
+            )])
+            return await q.message.reply_text(
+                "Выбери язык — переведу и перерисую картинки:",
+                reply_markup=InlineKeyboardMarkup(rows),
+            )
+        if data == "tr:manual":
             context.user_data.pop("slots", None)
             _clear_awaiting(context)
             return await q.message.reply_text(
@@ -759,6 +785,33 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 "(Рис. + заголовок + буллеты). Я перерисую те же картинки "
                 "с новым текстом."
             )
+        if data.startswith("tr:"):
+            code = data.split(":", 1)[1]
+            lang_label = LANG_LABELS.get(code)
+            if not lang_label:
+                return await q.edit_message_text("Этот язык я не знаю.")
+            slots = context.user_data.get("slots") or []
+            if not slots:
+                return await q.edit_message_text(
+                    "Слоты потерялись (рестарт?). Пришли статью заново."
+                )
+            await q.edit_message_text(
+                f"{lang_label} — перевожу…"
+            )
+            try:
+                new_slots = await translator.translate_slots(
+                    slots, lang_label, cfg.openai_api_key
+                )
+            except Exception as exc:  # noqa: BLE001
+                return await q.message.reply_text(
+                    f"Перевод не удался ({type(exc).__name__}): {str(exc)[:120]}"
+                )
+            context.user_data["slots"] = new_slots
+            await q.message.reply_text(
+                f"✅ Текст переведён на {lang_label}. Запускаю генерацию…"
+            )
+            # Сразу регенерация — слоты уже обновлены в user_data.
+            return await _run_generation(update, context)
         if data == "refs:back":
             counts = _list_categories()
             lines = ["📸 Твои рефы:"]
