@@ -1,6 +1,7 @@
 """Загрузка статьи в плоский текст.
 
 Вход (TZ 8.1): файл .docx/.md/.txt и ссылка.
+- .docx — через mammoth → markdown (кроссплатформенно, работает на Linux);
 - Google Docs — нативный txt-экспорт (чисто, без HTML-мусора);
 - обычная web-страница и публичный Notion (notion.site) — HTML→текст;
 - приватный Notion требует интеграцию-токен — это зависит от друга,
@@ -10,8 +11,6 @@
 from __future__ import annotations
 
 import re
-import shutil
-import subprocess
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -37,24 +36,14 @@ def load_article(path: str | Path) -> str:
         return p.read_text(encoding="utf-8")
 
     if ext == ".docx":
-        # textutil есть только на macOS. На Linux/проде его нет — даём
-        # внятный совет вместо невнятного FileNotFoundError изнутри.
-        if not shutil.which("textutil"):
-            raise RuntimeError(
-                ".docx конвертируется через textutil (только macOS). "
-                "На этом хосте его нет — пришли статью .md/.txt или "
-                "ссылкой на Google Doc (их бот понимает везде)."
-            )
-        proc = subprocess.run(
-            ["textutil", "-convert", "txt", "-stdout", str(p)],
-            capture_output=True,
-        )
-        if proc.returncode != 0:
-            raise RuntimeError(
-                "textutil не смог конвертировать .docx: "
-                + proc.stderr.decode("utf-8", errors="replace")
-            )
-        return proc.stdout.decode("utf-8", errors="replace")
+        # mammoth → markdown. Кроссплатформенно, не нужен macOS-textutil.
+        # Markdown с экранированиями (*Fig\.* и т.д.) парсер не понимает —
+        # чистим разметку до плоского текста.
+        import mammoth
+
+        with open(p, "rb") as fh:
+            result = mammoth.convert_to_markdown(fh)
+        return _clean_markdown(result.value)
 
     raise ValueError(
         f"Неподдерживаемое расширение: {ext}. Допустимы: {sorted(SUPPORTED_EXT)}"
@@ -74,6 +63,33 @@ def load_from_url(url: str) -> str:
 
     # Обычная страница / публичный Notion — это HTML, чистим до текста.
     return _html_to_text(_http_get(url))
+
+
+def _clean_markdown(text: str) -> str:
+    """Чистит mammoth-разметку до плоского текста для нашего парсера.
+
+    - data:image base64 (огромные) → удаляем
+    - HTML-тэги (anchor'ы и др.) → удаляем
+    - Markdown-экранирования `\\.`, `\\-` → возвращаем символ
+    - Жирный/курсив `**`/`__`/`*`/`_` → снимаем
+    """
+    # ![](data:image/jpeg;base64,...) — иногда занимает 99% файла
+    text = re.sub(r"!\[[^\]]*\]\(data:[^)]+\)", "", text)
+    # Прочие inline картинки ![](url) — оставим хотя бы маркер пустым
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", text)
+    # HTML тэги
+    text = re.sub(r"<a[^>]*>(.*?)</a>", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"</?[a-z][^>]*>", "", text)
+    # Markdown escape backslashes: \. \- \( \) \[ \] ...
+    text = re.sub(r"\\([.,!?\-()\[\]{}*_<>])", r"\1", text)
+    # **text** / __text__ — снимаем
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"__(.+?)__", r"\1", text, flags=re.DOTALL)
+    # *text* / _text_ (одиночные) — снимаем, но не трогаем * как буллет
+    # (он в начале строки, после него пробел; здесь — внутри строки)
+    text = re.sub(r"(?<![*\w])\*([^\n*]+?)\*(?![*\w])", r"\1", text)
+    text = re.sub(r"(?<![_\w])_([^\n_]+?)_(?![_\w])", r"\1", text)
+    return text
 
 
 def _http_get(url: str) -> str:
