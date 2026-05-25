@@ -425,6 +425,18 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             caption=f"Готово: {slot_id} — {instruction}",
         )
 
+    def _clear_awaiting(context, *, keep: str | None = None) -> None:
+        """Сбрасывает все awaiting_* флаги кроме `keep`. Защищает от
+        ситуации когда юзер тапает разные «жди текст»-кнопки подряд:
+        старые флаги могли съесть следующее сообщение."""
+        for key in (
+            "awaiting_edit",
+            "awaiting_new_category",
+            "awaiting_category_for_photo",
+        ):
+            if key != keep:
+                context.user_data.pop(key, None)
+
     async def on_article(update, context):
         if not _guarded(update, wl):
             return await _deny(update)
@@ -433,7 +445,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         # Ждём текст правки (после кнопки «✏️ слот»)?
         awaiting = context.user_data.get("awaiting_edit")
         if awaiting and msg.text and not msg.text.startswith("/"):
-            context.user_data["awaiting_edit"] = None
+            _clear_awaiting(context)
             return await _do_edit(update, context, msg, awaiting, msg.text.strip())
 
         # Ждём имя новой категории (после кнопок «➕ Новая категория»)?
@@ -441,11 +453,8 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             context.user_data.get("awaiting_new_category")
             or context.user_data.get("awaiting_category_for_photo")
         ):
+            _clear_awaiting(context)
             name = msg.text.strip().lower()
-            photo_msg_id = context.user_data.pop(
-                "awaiting_category_for_photo", None
-            )
-            context.user_data.pop("awaiting_new_category", None)
             if not CATEGORY_NAME_RE.match(name):
                 return await msg.reply_text(
                     "Имя не подходит. Только латиница, цифры и `_`, "
@@ -459,24 +468,10 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             (cfg.refs_dir / name).mkdir(parents=True, exist_ok=True)
             await msg.reply_text(
                 f"✅ Категория «{name}» создана.\n"
-                f"В статье используй маркер: `Рис.[{name}] Заголовок`"
+                f"В статье используй маркер: `Рис.[{name}] Заголовок`\n"
+                "Чтобы добавить туда фото — пришли картинку и выбери "
+                f"«📁 {name}» в кнопках."
             )
-            # Если новая категория создавалась под загрузку фото — сохраним
-            # это фото туда сразу.
-            if photo_msg_id is not None:
-                try:
-                    parent = await context.bot.get_chat(
-                        update.effective_chat.id
-                    )
-                    # У PTB нет get_message по id; берём фото из reply_to
-                    # пользователя если он реплайнул на бота.
-                except Exception:  # noqa: BLE001
-                    parent = None
-                # Простой путь: попросим прислать фото заново.
-                await msg.reply_text(
-                    f"Теперь пришли фото — спрошу куда сохранить "
-                    f"(в т.ч. в новую «{name}»)."
-                )
             return
 
         choice = _choice(update)
@@ -689,6 +684,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 return await q.edit_message_text(
                     "Эта картинка уже неактуальна — сгенерируй заново."
                 )
+            _clear_awaiting(context, keep="awaiting_edit")
             context.user_data["awaiting_edit"] = sid
             return await q.message.reply_text(
                 f"Что изменить в «{sid}»? Напиши текстом "
@@ -701,6 +697,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 return await q.edit_message_text(
                     "Фото потерялось 😕 Пришли его заново."
                 )
+            _clear_awaiting(context, keep="awaiting_category_for_photo")
             context.user_data["awaiting_category_for_photo"] = parent.message_id
             return await q.edit_message_text(
                 "Как назвать категорию? Напиши одним словом латиницей "
@@ -746,12 +743,14 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             )
         if data == "translate":
             context.user_data.pop("slots", None)
+            _clear_awaiting(context)
             return await q.message.reply_text(
                 "🌍 Пришли статью с переведённым текстом — в том же формате "
                 "(Рис. + заголовок + буллеты). Я перерисую те же картинки "
                 "с новым текстом."
             )
         if data == "refs:newcat":
+            _clear_awaiting(context, keep="awaiting_new_category")
             context.user_data["awaiting_new_category"] = True
             return await q.edit_message_text(
                 "Как назвать категорию? Напиши одним словом латиницей "
