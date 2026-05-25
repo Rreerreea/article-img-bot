@@ -627,31 +627,36 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 "Если без описания — напиши `-`."
             )
 
-        # Ждём описание стиля (после создания новой категории).
+        # Ждём описание стиля (после создания новой категории ИЛИ после
+        # «✏️ Настроить стиль» из /refs).
         desc_target = context.user_data.get("awaiting_style_description")
         if desc_target and msg.text and not msg.text.startswith("/"):
             text = msg.text.strip()
+            desc_path = cfg.refs_dir / desc_target / ".style.txt"
+            # «-» = удалить описание (для edit-flow) или пропустить (для create).
             if text == "-":
                 _clear_awaiting(context)
+                if desc_path.is_file():
+                    try:
+                        desc_path.unlink()
+                    except OSError:
+                        pass
                 return await msg.reply_text(
-                    f"Окей, без описания. Теперь пришли фото — спрошу куда "
-                    "сохранить. Список — /refs."
+                    f"Описание стиля «{desc_target}» очищено. "
+                    "Теперь только рефы определяют стиль."
                 )
-            desc_path = cfg.refs_dir / desc_target / ".style.txt"
             try:
                 desc_path.parent.mkdir(parents=True, exist_ok=True)
                 desc_path.write_text(text, encoding="utf-8")
             except OSError as exc:
                 log.exception("style desc write failed for %s", desc_target)
-                # Флаг не чистим — даём шанс повторить ввод.
                 return await msg.reply_text(
                     f"Не получилось сохранить описание ({type(exc).__name__}): "
                     f"{str(exc)[:120]}\nПопробуй ещё раз."
                 )
             _clear_awaiting(context)
             return await msg.reply_text(
-                f"✅ Описание сохранено для «{desc_target}».\n"
-                "Теперь пришли фото-рефы — спрошу куда сохранить."
+                f"✅ Описание сохранено для «{desc_target}»."
             )
 
         choice = _choice(update)
@@ -755,19 +760,40 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             "\n".join(lines), reply_markup=_refs_kb(counts)
         )
 
+    def _read_style_desc(kind: str) -> str:
+        desc_file = cfg.refs_dir / kind / ".style.txt"
+        if not desc_file.is_file():
+            return ""
+        try:
+            return desc_file.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return ""
+
     async def _show_refs_list(q, kind: str) -> None:
         files = _list_refs(kind)
         label = _category_label(kind)
         back_kb = InlineKeyboardMarkup([[InlineKeyboardButton(
             "« Назад к рефам", callback_data="refs:back"
         )]])
+        # Шапка категории: текущее описание стиля + кнопка изменить.
+        desc = _read_style_desc(kind)
+        desc_text = (
+            f"{label}\n\n🎨 Описание стиля:\n«{desc}»"
+            if desc else
+            f"{label}\n\n🎨 Описание стиля: пусто.\n"
+            "Можно описать что должно быть в стиле — модель учитывает."
+        )
+        style_kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+            "✏️ Настроить стиль", callback_data=f"refs:editstyle:{kind}"
+        )]])
+        await q.message.reply_text(desc_text, reply_markup=style_kb)
         if not files:
             return await q.message.reply_text(
-                f"{label}: пусто. Пришли фото — спрошу куда сохранить.",
+                f"Рефов пока нет. Пришли фото — спрошу куда сохранить.",
                 reply_markup=back_kb,
             )
         await q.message.reply_text(
-            f"Все рефы {label} ({len(files)} шт):"
+            f"Все рефы ({len(files)} шт):"
         )
         for i, f in enumerate(files, 1):
             kb = InlineKeyboardMarkup(
@@ -988,6 +1014,25 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 "characters, charts, screenshots.\n\n"
                 "В статье потом будешь писать `Рис.[название] Заголовок`, "
                 "чтобы привязать слот к этой категории."
+            )
+        if data.startswith("refs:editstyle:"):
+            kind = data.split(":", 2)[2]
+            if not _category_exists(kind):
+                return await q.message.reply_text("Категории нет.")
+            _clear_awaiting(context, keep="awaiting_style_description")
+            context.user_data["awaiting_style_description"] = kind
+            current = _read_style_desc(kind)
+            head = (
+                f"Текущее описание «{kind}»:\n«{current}»\n\n"
+                if current else
+                f"У «{kind}» пока нет описания.\n\n"
+            )
+            return await q.message.reply_text(
+                head
+                + "Пришли НОВЫЙ текст одним сообщением — он заменит "
+                "старый и пойдёт в промпт при генерации.\n\n"
+                "Чтобы очистить (без описания) — пришли `-`.\n"
+                "Чтобы оставить как есть — пришли /cancel."
             )
         if data.startswith("refs:show:"):
             kind = data.split(":", 2)[2]
