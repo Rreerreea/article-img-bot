@@ -125,19 +125,27 @@ def build_prompt(
     has_refs: bool = False,
     style_desc: str = "",
 ) -> str:
-    """Сильный промпт: модель рисует ВЕСЬ текст сама.
+    """Промпт-каркас. Стиль вытаскиваем из рефов и/или user_notes — без
+    жёстких хардкодов «premium 3D / magazine / cryptocurrency motifs»,
+    иначе рефы не могут перебить.
 
-    Промпт языко-нейтральный — что прислали, то и рендерим (русский,
-    английский, испанский, любой). Никаких хардкодов про язык.
-
-    has_refs: если True — добавляется STYLE_HINT_FOR_REFS (просим строго
-        копировать визуал прикреплённых рефов).
-    style_desc: пользовательский текст-описание стиля (из .style.txt в
-        папке рефов) — добавляется как «User style notes: …».
+    has_refs: если True — STYLE_HINT_FOR_REFS (строго копировать визуал).
+    style_desc: пользовательский .style.txt — идёт как «User style notes».
+    preset: оставлен для совместимости со скрытым /style; если задан
+        нетипично — добавляется как доп. подсказка, иначе нейтрально.
     """
-    style = presets.get(preset)
     style_hint = STYLE_HINT_FOR_REFS + "\n" if has_refs else ""
     user_notes = f"User style notes: {style_desc}\n" if style_desc else ""
+    # Преcет применяется ТОЛЬКО если выбран явно через /style. По дефолту
+    # (DEFAULT preset) ничего не подмешиваем — пусть рефы рулят.
+    preset_line = ""
+    if preset and preset != presets.DEFAULT:
+        p = presets.get(preset)
+        if slot.type is SlotType.INFOGRAPHIC and p.infographic:
+            preset_line = f"{p.infographic}.\n"
+        elif slot.type is SlotType.STORY and p.story:
+            preset_line = f"{p.story}.\n"
+
     if slot.type is SlotType.INFOGRAPHIC:
         n = max(1, len(slot.bullets))
         title = slot.title.strip()
@@ -145,42 +153,35 @@ def build_prompt(
             f"{i}. {b.strip()}" for i, b in enumerate(slot.bullets, 1)
         )
         title_line = (
-            f"Prominent title at the top: «{title}».\n" if title else ""
+            f"Title at the top of the image: «{title}».\n" if title else ""
         )
         return (
-            f"{style.infographic}. 16:9 horizontal cinematic layout.\n"
-            f"{style_hint}{user_notes}"
-            "CRITICAL SAFE AREA: the very top ~10% and very bottom ~10% of "
-            "the canvas will be cropped. Position the title AND every "
-            "content block within the central ~80% vertical region. Leave "
-            "GENEROUS empty margin (decorative background only) at the very "
-            "top and very bottom — no text, no critical illustrations there.\n"
+            "16:9 horizontal layout.\n"
+            "SAFE AREA: top ~10% and bottom ~10% of the canvas may be "
+            "cropped — keep the title and every content block within the "
+            "central ~80% vertical region.\n"
+            f"{preset_line}{style_hint}{user_notes}"
             f"{title_line}"
-            f"{n} content blocks in a well-structured layout; each block has "
-            "a distinctive custom thematic illustration (cryptocurrency, "
-            "tokens, blockchain, finance motifs), rich and polished — NOT "
-            "generic clipart, NOT cluttered.\n"
+            f"{n} content blocks describing the items below. Each block "
+            "has a clear distinctive illustration matching its caption.\n"
             "Render EXACTLY the text below — same language, same script, "
-            "same characters as given. Do NOT translate, do NOT transliterate. "
-            "Perfectly spelled, fully legible, no typos, no distorted or fake "
-            "letters, no gibberish — each numbered item is one block caption:\n"
+            "same characters as given. Do NOT translate, do NOT "
+            "transliterate. Perfectly spelled, fully legible, no typos, "
+            "no fake letters. Each numbered item is one block caption:\n"
             f"{blocks}\n"
-            f"Typography for ALL text on the image: {FONT_NAME} font — "
-            f"{FONT_DESCRIPTION}. Use it consistently for both the title "
-            "and block captions. "
-            "All text must be crisp and accurate. No extra text. "
-            "Sharp, professional, magazine-grade quality."
+            f"Text typography: {FONT_NAME} font ({FONT_DESCRIPTION}). "
+            "All text must be crisp and accurate. No extra text."
         )
-    # Сюжетная: образная иллюстрация по смыслу (текст не нужен).
+    # Сюжетная: один цельный кадр без подписей. Стиль решают рефы.
     bits = [slot.title, *slot.bullets]
     body = ". ".join(b for b in bits if b).strip()
-    base = (
-        f"{style.story}. 16:9 horizontal cinematic composition. "
-        f"{style_hint}{user_notes}"
-        "Keep the main subject within the central ~80% vertical area — "
-        "the very top and very bottom of the canvas may be cropped."
-    )
-    return f"{base} Scene: {body}" if body else base
+    return (
+        "16:9 horizontal composition.\n"
+        "SAFE AREA: top ~10% and bottom ~10% may be cropped — keep the "
+        "main subject within the central ~80% vertical region.\n"
+        f"{preset_line}{style_hint}{user_notes}"
+        + (f"Subject: {body}" if body else "")
+    ).rstrip()
 
 
 def build(
