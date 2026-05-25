@@ -32,26 +32,36 @@ class GenStatus(str, Enum):
 class ImageSlot:
     """Одно задание на картинку, извлечённое из статьи под маркером «Рис.».
 
-    id      — стабильный идентификатор (станет именем файла, TZ 7.4);
-    title   — заголовок после «Рис.» (может быть пустым);
-    bullets — пункты-содержание под маркером;
-    type    — инфографика или сюжетная.
+    id       — стабильный идентификатор (станет именем файла, TZ 7.4);
+    title    — заголовок после «Рис.» (может быть пустым);
+    bullets  — пункты-содержание под маркером;
+    type     — инфографика или сюжетная (выбор промпта);
+    category — опциональный тег из `Рис.[название]`. Определяет папку
+               рефов: если задан, бот берёт refs/<category>/ вместо
+               стандартной refs/infographic|story/.
     """
 
     id: str
     title: str
     bullets: tuple[str, ...]
     type: SlotType
+    category: str | None = None
 
     def cache_key(self, refs_signature: str = "") -> str:
         """Ключ кэша. Одинаковый блок при тех же рефах не генерится повторно.
 
-        Учитывает тип, заголовок, пункты и сигнатуру набора рефов:
-        смена рефов = другой результат = другой ключ.
+        Учитывает тип, заголовок, пункты, категорию и сигнатуру набора
+        рефов: смена рефов или категории = другой результат = другой ключ.
         """
         joiner = chr(32)  # пробел
         payload = joiner.join(
-            [self.type.value, self.title, *self.bullets, refs_signature]
+            [
+                self.type.value,
+                self.category or "",
+                self.title,
+                *self.bullets,
+                refs_signature,
+            ]
         )
         return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 

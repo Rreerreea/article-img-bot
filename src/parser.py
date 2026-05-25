@@ -14,7 +14,10 @@ import re
 from .classifier import classify_type
 from .models import ImageSlot
 
-MARKER = re.compile(r"^\s*(?:Рис|Fig|Figure|Pic|Image)\.?\s?(.*)$", re.IGNORECASE)
+MARKER = re.compile(
+    r"^\s*(?:Рис|Fig|Figure|Pic|Image)\.?\s*(?:\[([^\]]+)\])?\s*(.*)$",
+    re.IGNORECASE,
+)
 # Буллет в начале строки: • (docx/HTML), -, *, ·, –, — (Markdown/Docs).
 # Обычные абзацы так не начинаются — границу блока не размывает.
 BULLET_LINE = re.compile(r"^[•\-\*·–—]\s+(.*)$")
@@ -61,7 +64,9 @@ def parse(text: str) -> list[ImageSlot]:
             i += 1
             continue
 
-        title = m.group(1).strip()
+        # Группа 1 — опц. категория из квадратных скобок, группа 2 — заголовок.
+        category = (m.group(1) or "").strip().lower() or None
+        title = m.group(2).strip()
         bullets: list[str] = []
 
         j = i + 1
@@ -90,6 +95,7 @@ def parse(text: str) -> list[ImageSlot]:
                 title=title,
                 bullets=tuple(bullets),
                 type=classify_type(title, bullets),
+                category=category,
             )
         )
         i = max(j, i + 1)

@@ -44,9 +44,19 @@ class PromptSpec:
     refs_signature: str
 
 
-def refs_dir_for(slot_type: SlotType, base_refs_dir: Path) -> Path:
-    """base/infographic либо base/story (заказчик заливает рефы туда)."""
-    return Path(base_refs_dir) / slot_type.value
+def refs_dir_for(slot, base_refs_dir: Path) -> Path:
+    """Папка рефов для слота.
+
+    Если у слота явно указана category (`Рис.[название]` в статье) и
+    эта папка существует — берём её. Иначе fallback на стандартную
+    base/infographic|story по типу слота.
+    """
+    base = Path(base_refs_dir)
+    if getattr(slot, "category", None):
+        custom = base / slot.category
+        if custom.is_dir():
+            return custom
+    return base / slot.type.value
 
 
 def refs_signature(folder: Path) -> str:
@@ -104,7 +114,7 @@ def build_prompt(slot: ImageSlot, preset: str | None = None) -> str:
 def build(
     slot: ImageSlot, base_refs_dir: Path, preset: str | None = None
 ) -> PromptSpec:
-    folder = refs_dir_for(slot.type, Path(base_refs_dir))
+    folder = refs_dir_for(slot, Path(base_refs_dir))
     return PromptSpec(
         prompt=build_prompt(slot, preset),
         aspect_ratio=ASPECT_RATIO[slot.type],

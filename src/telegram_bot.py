@@ -9,6 +9,7 @@ UX: inline-кнопки (смета→«Запустить», стиль, пра
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -26,8 +27,14 @@ from .whitelist import Whitelist
 
 ARTICLE_EXT = {".docx", ".md", ".txt"}
 IMG_EXT = {".png", ".jpg", ".jpeg", ".webp"}
-REF_TYPES = {"infographic", "story"}
+# Системные категории (всегда есть). Пользовательские — обычные подпапки в refs/.
+SYSTEM_CATEGORIES = {"infographic", "story"}
+# Старое имя оставлено для обратной совместимости — используется как
+# «известные базовые». Новые категории создаются динамически.
+REF_TYPES = SYSTEM_CATEGORIES
 MAX_REFS = 4
+# Имя категории: латиница, цифры, подчёркивания. Без пробелов и спецсимволов.
+CATEGORY_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,29}$")
 
 START_TEXT = (
     "👋 Пришли статью — сделаю картинки.\n\n"
@@ -118,21 +125,35 @@ def _edit_kb(ids: list[str], context) -> InlineKeyboardMarkup | None:
     return InlineKeyboardMarkup(rows)
 
 
-def _refs_kb(ig_count: int, st_count: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    f"🧮 Инфографика ({ig_count})",
-                    callback_data="refs:show:infographic",
-                ),
-                InlineKeyboardButton(
-                    f"🎬 Сюжет ({st_count})",
-                    callback_data="refs:show:story",
-                ),
-            ],
-        ]
+CATEGORY_LABELS = {
+    "infographic": "🧮 Инфографика",
+    "story": "🎬 Сюжет",
+}
+
+
+def _category_label(name: str) -> str:
+    """Подпись для категории. Системные — с иконками, кастомные — как есть."""
+    return CATEGORY_LABELS.get(name, f"📁 {name}")
+
+
+def _refs_kb(counts: dict[str, int]) -> InlineKeyboardMarkup:
+    """Меню /refs. По строке на категорию + кнопка добавления новой."""
+    rows = []
+    # Системные сверху, потом кастомные алфавитно.
+    ordered = ["infographic", "story"] + sorted(
+        k for k in counts if k not in SYSTEM_CATEGORIES
     )
+    for name in ordered:
+        if name not in counts:
+            continue
+        rows.append([InlineKeyboardButton(
+            f"{_category_label(name)} ({counts[name]})",
+            callback_data=f"refs:show:{name}",
+        )])
+    rows.append([InlineKeyboardButton(
+        "➕ Новая категория", callback_data="refs:newcat"
+    )])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_handlers(cfg: Config, wl: Whitelist) -> dict:
@@ -160,6 +181,40 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         d = cfg.refs_dir / kind
         d.mkdir(parents=True, exist_ok=True)
         return d
+
+    def _list_categories() -> dict[str, int]:
+        """Все категории на диске + системные с гарантированными папками."""
+        cfg.refs_dir.mkdir(parents=True, exist_ok=True)
+        for s in SYSTEM_CATEGORIES:
+            (cfg.refs_dir / s).mkdir(parents=True, exist_ok=True)
+        return {
+            d.name: _ref_count(d)
+            for d in sorted(cfg.refs_dir.iterdir()) if d.is_dir()
+        }
+
+    def _category_exists(name: str) -> bool:
+        return (
+            name in SYSTEM_CATEGORIES
+            or (cfg.refs_dir / name).is_dir()
+        ) and not ("/" in name or ".." in name)
+
+    def _categories_kb() -> InlineKeyboardMarkup:
+        """Кнопки выбора категории при загрузке фото."""
+        cats = list(_list_categories().keys())
+        rows, row = [], []
+        for c in cats:
+            row.append(InlineKeyboardButton(
+                _category_label(c), callback_data=f"rsave:{c}"
+            ))
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        rows.append([InlineKeyboardButton(
+            "➕ Новая категория", callback_data="rsave:newcat"
+        )])
+        return InlineKeyboardMarkup(rows)
 
     async def _save_ref(message, kind: str, tg_file) -> None:
         folder = _refs_dir(kind)
@@ -355,6 +410,49 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             context.user_data["awaiting_edit"] = None
             return await _do_edit(update, context, msg, awaiting, msg.text.strip())
 
+        # Ждём имя новой категории (после кнопок «➕ Новая категория»)?
+        if msg.text and not msg.text.startswith("/") and (
+            context.user_data.get("awaiting_new_category")
+            or context.user_data.get("awaiting_category_for_photo")
+        ):
+            name = msg.text.strip().lower()
+            photo_msg_id = context.user_data.pop(
+                "awaiting_category_for_photo", None
+            )
+            context.user_data.pop("awaiting_new_category", None)
+            if not CATEGORY_NAME_RE.match(name):
+                return await msg.reply_text(
+                    "Имя не подходит. Только латиница, цифры и `_`, "
+                    "начинать с буквы, до 30 символов. Попробуй ещё раз "
+                    "через /refs → ➕ Новая категория."
+                )
+            if name in SYSTEM_CATEGORIES:
+                return await msg.reply_text(
+                    f"«{name}» — системная категория, уже есть."
+                )
+            (cfg.refs_dir / name).mkdir(parents=True, exist_ok=True)
+            await msg.reply_text(
+                f"✅ Категория «{name}» создана.\n"
+                f"В статье используй маркер: `Рис.[{name}] Заголовок`"
+            )
+            # Если новая категория создавалась под загрузку фото — сохраним
+            # это фото туда сразу.
+            if photo_msg_id is not None:
+                try:
+                    parent = await context.bot.get_chat(
+                        update.effective_chat.id
+                    )
+                    # У PTB нет get_message по id; берём фото из reply_to
+                    # пользователя если он реплайнул на бота.
+                except Exception:  # noqa: BLE001
+                    parent = None
+                # Простой путь: попросим прислать фото заново.
+                await msg.reply_text(
+                    f"Теперь пришли фото — спрошу куда сохранить "
+                    f"(в т.ч. в новую «{name}»)."
+                )
+            return
+
         choice = _choice(update)
         try:
             if msg.document:
@@ -366,23 +464,9 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 if suffix in IMG_EXT:
                     # Картинка прислана как ФАЙЛ (не фото) — спросим
                     # категорию так же, как для photo-сообщений.
-                    kb = InlineKeyboardMarkup(
-                        [
-                            [
-                                InlineKeyboardButton(
-                                    "🧮 Инфографика",
-                                    callback_data="rsave:infographic",
-                                ),
-                                InlineKeyboardButton(
-                                    "🎬 Сюжет",
-                                    callback_data="rsave:story",
-                                ),
-                            ]
-                        ]
-                    )
                     return await msg.reply_text(
                         "Куда добавить этот референс?",
-                        reply_markup=kb,
+                        reply_markup=_categories_kb(),
                         reply_to_message_id=msg.message_id,
                     )
                 if suffix not in ARTICLE_EXT:
@@ -450,15 +534,23 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
     async def on_refs(update, context):
         if not _guarded(update, wl):
             return await _deny(update)
-        ig = _ref_count(cfg.refs_dir / "infographic")
-        st = _ref_count(cfg.refs_dir / "story")
+        counts = _list_categories()
+        lines = ["📸 Твои рефы:"]
+        for name in (
+            ["infographic", "story"]
+            + sorted(k for k in counts if k not in SYSTEM_CATEGORIES)
+        ):
+            if name in counts:
+                lines.append(
+                    f"• {_category_label(name)}: {counts[name]}"
+                )
+        lines.append("")
+        lines.append("Тапни категорию — покажу рефы с кнопкой удаления.")
+        lines.append("Чтобы добавить реф — пришли мне фото.")
+        lines.append("В статье используй маркер `Рис.[категория] Заголовок` "
+                     "чтобы привязать слот к конкретной категории.")
         await update.message.reply_text(
-            f"📸 Твои рефы:\n"
-            f"• Инфографика: {ig}\n"
-            f"• Сюжет: {st}\n\n"
-            "Тапни категорию — покажу каждый реф с кнопкой удаления.\n"
-            "Чтобы добавить — просто пришли мне фото.",
-            reply_markup=_refs_kb(ig, st),
+            "\n".join(lines), reply_markup=_refs_kb(counts)
         )
 
     async def _show_refs_list(q, kind: str) -> None:
@@ -486,26 +578,14 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         if not _guarded(update, wl):
             return await _deny(update)
         pending = state.get(update.effective_chat.id, "pending_ref")
-        if pending in REF_TYPES:
+        if pending and _category_exists(pending):
             photo = update.message.photo[-1]
             return await _save_ref(
                 update.message, pending, await photo.get_file()
             )
-        kb = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "🧮 Инфографика", callback_data="rsave:infographic"
-                    ),
-                    InlineKeyboardButton(
-                        "🎬 Сюжет", callback_data="rsave:story"
-                    ),
-                ]
-            ]
-        )
         await update.message.reply_text(
             "Куда добавить этот референс?",
-            reply_markup=kb,
+            reply_markup=_categories_kb(),
             reply_to_message_id=update.message.message_id,
         )
 
@@ -586,9 +666,22 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 f"Что изменить в «{sid}»? Напиши текстом "
                 "(например: сделай фон темнее, убери иконку)."
             )
+        if data == "rsave:newcat":
+            # Запоминаем фото (по reply_to) и просим имя новой категории.
+            parent = q.message.reply_to_message
+            if not parent:
+                return await q.edit_message_text(
+                    "Фото потерялось 😕 Пришли его заново."
+                )
+            context.user_data["awaiting_category_for_photo"] = parent.message_id
+            return await q.edit_message_text(
+                "Как назвать категорию? Напиши одним словом латиницей "
+                "(маленькие буквы, цифры, подчёркивания). Например: "
+                "characters, charts, screenshots."
+            )
         if data.startswith("rsave:"):
             kind = data.split(":", 1)[1]
-            if kind not in REF_TYPES:
+            if not _category_exists(kind):
                 return await q.edit_message_text(
                     "Неизвестная категория, пришли фото заново."
                 )
@@ -630,9 +723,18 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 "(Рис. + заголовок + буллеты). Я перерисую те же картинки "
                 "с новым текстом."
             )
+        if data == "refs:newcat":
+            context.user_data["awaiting_new_category"] = True
+            return await q.edit_message_text(
+                "Как назвать категорию? Напиши одним словом латиницей "
+                "(маленькие буквы, цифры, подчёркивания). Например: "
+                "characters, charts, screenshots.\n\n"
+                "В статье потом будешь писать `Рис.[название] Заголовок`, "
+                "чтобы привязать слот к этой категории."
+            )
         if data.startswith("refs:show:"):
             kind = data.split(":", 2)[2]
-            if kind not in REF_TYPES:
+            if not _category_exists(kind):
                 return
             return await _show_refs_list(q, kind)
         if data.startswith("refs:del:"):
@@ -640,9 +742,8 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             if len(parts) < 4:
                 return
             kind, filename = parts[2], parts[3]
-            if kind not in REF_TYPES:
+            if not _category_exists(kind):
                 return await q.edit_message_caption(caption="Неизвестная категория.")
-            # Защита от path traversal — имя без слешей.
             if "/" in filename or ".." in filename:
                 return await q.edit_message_caption(caption="Подозрительное имя файла.")
             target = _refs_dir(kind) / filename
