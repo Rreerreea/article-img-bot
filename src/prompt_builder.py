@@ -126,7 +126,7 @@ def build_prompt(slot: ImageSlot, preset: str | None = None) -> str:
             f"Prominent title at the top: «{title}».\n" if title else ""
         )
         return (
-            f"{style.infographic}. 3:2 horizontal layout.\n"
+            f"{style.infographic}. 16:9 horizontal layout.\n"
             f"{title_line}"
             f"{n} content blocks in a well-structured layout; each block has "
             "a distinctive custom thematic illustration (cryptocurrency, "
@@ -146,7 +146,8 @@ def build_prompt(slot: ImageSlot, preset: str | None = None) -> str:
     # Сюжетная: образная иллюстрация по смыслу (текст не нужен).
     bits = [slot.title, *slot.bullets]
     body = ". ".join(b for b in bits if b).strip()
-    return f"{style.story}. Scene: {body}" if body else style.story
+    base = f"{style.story}. 16:9 horizontal cinematic composition."
+    return f"{base} Scene: {body}" if body else base
 
 
 def build(
