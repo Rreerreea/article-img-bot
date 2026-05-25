@@ -27,7 +27,7 @@ from .whitelist import Whitelist
 ARTICLE_EXT = {".docx", ".md", ".txt"}
 IMG_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 REF_TYPES = {"infographic", "story"}
-MAX_REFS = 8
+MAX_REFS = 4
 
 START_TEXT = (
     "👋 Пришли статью — сделаю картинки.\n\n"
@@ -363,6 +363,28 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 pending = state.get(update.effective_chat.id, "pending_ref")
                 if suffix in IMG_EXT and pending in REF_TYPES:
                     return await _save_ref(msg, pending, await doc.get_file())
+                if suffix in IMG_EXT:
+                    # Картинка прислана как ФАЙЛ (не фото) — спросим
+                    # категорию так же, как для photo-сообщений.
+                    kb = InlineKeyboardMarkup(
+                        [
+                            [
+                                InlineKeyboardButton(
+                                    "🧮 Инфографика",
+                                    callback_data="rsave:infographic",
+                                ),
+                                InlineKeyboardButton(
+                                    "🎬 Сюжет",
+                                    callback_data="rsave:story",
+                                ),
+                            ]
+                        ]
+                    )
+                    return await msg.reply_text(
+                        "Куда добавить этот референс?",
+                        reply_markup=kb,
+                        reply_to_message_id=msg.message_id,
+                    )
                 if suffix not in ARTICLE_EXT:
                     return await msg.reply_text(
                         "Я понимаю .docx, .md, .txt или ссылку на статью 🙂"
@@ -571,21 +593,30 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                     "Неизвестная категория, пришли фото заново."
                 )
             parent = q.message.reply_to_message
-            if not parent or not parent.photo:
+            if not parent:
                 return await q.edit_message_text(
                     "Фото потерялось 😕 Пришли его заново."
                 )
-            photo = parent.photo[-1]
+            # Картинка могла прийти и как фото, и как файл-документ.
+            if parent.photo:
+                tg_file = await parent.photo[-1].get_file()
+            elif parent.document and Path(
+                parent.document.file_name or ""
+            ).suffix.lower() in IMG_EXT:
+                tg_file = await parent.document.get_file()
+            else:
+                return await q.edit_message_text(
+                    "Фото потерялось 😕 Пришли его заново."
+                )
             folder = _refs_dir(kind)
             n = _ref_count(folder)
             if n >= MAX_REFS:
                 return await q.edit_message_text(
-                    f"Уже {MAX_REFS} рефов для «{kind}» — лимит. "
-                    f"Удали лишние через /refs."
+                    f"Уже {MAX_REFS} рефов для «{kind}» — это максимум "
+                    f"для генерации. Удали лишние через /refs."
                 )
             import datetime as _dt
             ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-            tg_file = await photo.get_file()
             await tg_file.download_to_drive(folder / f"ref_{ts}.jpg")
             label = "инфографику" if kind == "infographic" else "сюжетные"
             return await q.edit_message_text(
