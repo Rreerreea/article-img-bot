@@ -118,18 +118,19 @@ def _edit_kb(ids: list[str], context) -> InlineKeyboardMarkup | None:
     return InlineKeyboardMarkup(rows)
 
 
-def _refs_kb() -> InlineKeyboardMarkup:
+def _refs_kb(ig_count: int, st_count: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("📊 Инфографика", callback_data="refs:set:infographic"),
-                InlineKeyboardButton("🖼 Сюжетные", callback_data="refs:set:story"),
+                InlineKeyboardButton(
+                    f"🧮 Инфографика ({ig_count})",
+                    callback_data="refs:show:infographic",
+                ),
+                InlineKeyboardButton(
+                    f"🎬 Сюжет ({st_count})",
+                    callback_data="refs:show:story",
+                ),
             ],
-            [
-                InlineKeyboardButton("🗑 Очистить инфогр.", callback_data="refs:clear:infographic"),
-                InlineKeyboardButton("🗑 Очистить сюжет.", callback_data="refs:clear:story"),
-            ],
-            [InlineKeyboardButton("✅ Готово", callback_data="refs:done")],
         ]
     )
 
@@ -166,11 +167,14 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         if n >= MAX_REFS:
             return await message.reply_text(
                 f"Уже {MAX_REFS} рефов для «{kind}» — лимит. "
-                f"Очисти через /refs."
+                f"Удали лишние через /refs."
             )
-        await tg_file.download_to_drive(folder / f"ref_{n + 1}.jpg")
+        import datetime as _dt
+        ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        await tg_file.download_to_drive(folder / f"ref_{ts}.jpg")
         await message.reply_text(
-            f"Реф добавлен в «{kind}» ({n + 1}/{MAX_REFS}). Ещё — шли сюда."
+            f"Реф добавлен в «{kind}» ({n + 1}/{MAX_REFS}). "
+            "Ещё — шли сюда. Список и удаление — /refs."
         )
 
     async def start(update, context):
@@ -414,16 +418,47 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             "Выбери стиль:", reply_markup=_style_kb(_preset(update))
         )
 
+    def _list_refs(kind: str) -> list[Path]:
+        folder = _refs_dir(kind)
+        return sorted(
+            f for f in folder.iterdir()
+            if f.is_file() and f.suffix.lower() in IMG_EXT
+        )
+
     async def on_refs(update, context):
         if not _guarded(update, wl):
             return await _deny(update)
         ig = _ref_count(cfg.refs_dir / "infographic")
         st = _ref_count(cfg.refs_dir / "story")
         await update.message.reply_text(
-            f"Свои образцы стиля:\n• инфографика: {ig}\n• сюжетные: {st}\n\n"
-            "Выбери, что добавить — потом пришли картинки:",
-            reply_markup=_refs_kb(),
+            f"📸 Твои рефы:\n"
+            f"• Инфографика: {ig}\n"
+            f"• Сюжет: {st}\n\n"
+            "Тапни категорию — покажу каждый реф с кнопкой удаления.\n"
+            "Чтобы добавить — просто пришли мне фото.",
+            reply_markup=_refs_kb(ig, st),
         )
+
+    async def _show_refs_list(q, kind: str) -> None:
+        files = _list_refs(kind)
+        label = "инфографики" if kind == "infographic" else "сюжета"
+        if not files:
+            return await q.message.reply_text(
+                f"Пусто. Пришли фото — спрошу куда сохранить."
+            )
+        await q.message.reply_text(
+            f"Все рефы {label} ({len(files)} шт):"
+        )
+        for i, f in enumerate(files, 1):
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton(
+                    "🗑 Удалить", callback_data=f"refs:del:{kind}:{f.name}"
+                )]]
+            )
+            with open(f, "rb") as fh:
+                await q.message.reply_photo(
+                    photo=fh, caption=f"#{i} · {f.name}", reply_markup=kb
+                )
 
     async def on_ref_photo(update, context):
         if not _guarded(update, wl):
@@ -546,14 +581,16 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             if n >= MAX_REFS:
                 return await q.edit_message_text(
                     f"Уже {MAX_REFS} рефов для «{kind}» — лимит. "
-                    f"Удали лишние через Finder в папке refs/{kind}/."
+                    f"Удали лишние через /refs."
                 )
+            import datetime as _dt
+            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
             tg_file = await photo.get_file()
-            await tg_file.download_to_drive(folder / f"ref_{n + 1}.jpg")
+            await tg_file.download_to_drive(folder / f"ref_{ts}.jpg")
             label = "инфографику" if kind == "infographic" else "сюжетные"
             return await q.edit_message_text(
                 f"Сохранено в {label} ({n + 1}/{MAX_REFS}). "
-                "Шли ещё фото — спрошу куда."
+                "Шли ещё фото — спрошу куда. Список — /refs."
             )
         if data == "translate":
             context.user_data.pop("slots", None)
@@ -562,29 +599,30 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 "(Рис. + заголовок + буллеты). Я перерисую те же картинки "
                 "с новым текстом."
             )
-        if data.startswith("refs:"):
-            parts = data.split(":")
-            chat_id = update.effective_chat.id
-            if parts[1] == "done":
-                state.set(chat_id, "pending_ref", None)
-                return await q.edit_message_text("Приём референсов выключен.")
-            if parts[1] == "set" and parts[2] in REF_TYPES:
-                state.set(chat_id, "pending_ref", parts[2])
-                return await q.edit_message_text(
-                    f"Жду картинки-референсы для «{parts[2]}». Шли сюда. "
-                    "Закончишь — кнопка «Готово» (/refs)."
+        if data.startswith("refs:show:"):
+            kind = data.split(":", 2)[2]
+            if kind not in REF_TYPES:
+                return
+            return await _show_refs_list(q, kind)
+        if data.startswith("refs:del:"):
+            parts = data.split(":", 3)
+            if len(parts) < 4:
+                return
+            kind, filename = parts[2], parts[3]
+            if kind not in REF_TYPES:
+                return await q.edit_message_caption(caption="Неизвестная категория.")
+            # Защита от path traversal — имя без слешей.
+            if "/" in filename or ".." in filename:
+                return await q.edit_message_caption(caption="Подозрительное имя файла.")
+            target = _refs_dir(kind) / filename
+            if not target.exists():
+                return await q.edit_message_caption(
+                    caption=f"❎ {filename} — уже нет."
                 )
-            if parts[1] == "clear" and parts[2] in REF_TYPES:
-                folder = cfg.refs_dir / parts[2]
-                removed = 0
-                if folder.is_dir():
-                    for f in list(folder.iterdir()):
-                        if f.suffix.lower() in IMG_EXT:
-                            f.unlink()
-                            removed += 1
-                return await q.edit_message_text(
-                    f"Очищено рефов «{parts[2]}»: {removed}."
-                )
+            target.unlink()
+            return await q.edit_message_caption(
+                caption=f"🗑 Удалено: {filename}"
+            )
 
     async def on_error(update, context):
         tgt = getattr(update, "effective_message", None)
