@@ -67,14 +67,15 @@ def _ref_count(folder: Path) -> int:
 def _estimate_kb(
     n: int, preset_label: str, model_label: str
 ) -> InlineKeyboardMarkup:
+    # Стиль временно скрыт из UI (Гоша зафиксировал 2026-05-25). Код /style
+    # и presets.py живут — при необходимости вернуть кнопку, раскомментировать
+    # ниже строку «🎨 Стиль:».
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(f"🚀 Запустить ({n})", callback_data="go")],
-            [
-                InlineKeyboardButton(
-                    f"🎨 Стиль: {preset_label}", callback_data="style:menu"
-                ),
-            ],
+            # [InlineKeyboardButton(
+            #     f"🎨 Стиль: {preset_label}", callback_data="style:menu"
+            # )],
             [
                 InlineKeyboardButton(
                     f"🤖 Модель: {model_label}", callback_data="model:menu"
@@ -245,7 +246,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             "📄 Статья → картинки: кинь файл или ссылку.\n"
             "📸 Свой реф: пришли фото — спрошу куда сохранить.\n"
             "🌍 Перевод: после ZIPа жми «Перевести» и кинь статью с другим языком.\n"
-            "🤖 Модель/стиль: кнопками при смете."
+            "🤖 Модель: кнопкой при смете."
         )
 
     # ---- генерация (общая для кнопки и /go) ------------------------------
@@ -505,7 +506,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         label = presets.get(_preset(update)).label
         m_label = choice.label
         await msg.reply_text(
-            f"{est.human()}\n🎨 Стиль: {label}\n🤖 Модель: {m_label}",
+            f"{est.human()}\n🤖 Модель: {m_label}",
             reply_markup=_estimate_kb(len(slots), label, m_label),
         )
 
@@ -627,9 +628,12 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             n = len(context.user_data.get("slots") or [])
             label = presets.PRESETS[name].label
             m_label = _choice(update).label
+            # Стиль скрыт из UI, но /style и callback оставлены рабочими
+            # для совместимости со старыми диалогами (где смета ещё имела
+            # кнопку стиля до релиза 2026-05-25).
             if n:
                 return await q.edit_message_text(
-                    f"🎨 Стиль: {label}\n🤖 Модель: {m_label}",
+                    f"🤖 Модель: {m_label}",
                     reply_markup=_estimate_kb(n, label, m_label),
                 )
             return await q.edit_message_text(
@@ -648,7 +652,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             label = presets.get(_preset(update)).label
             if n:
                 return await q.edit_message_text(
-                    f"🎨 Стиль: {label}\n🤖 Модель: {choice_obj.label}",
+                    f"🤖 Модель: {choice_obj.label}",
                     reply_markup=_estimate_kb(n, label, choice_obj.label),
                 )
             return await q.edit_message_text(
