@@ -29,6 +29,17 @@ TARGET_SIZE: dict[SlotType, tuple[int, int]] = {
     SlotType.STORY: (1024, 1024),       # квадрат — образная сцена
 }
 
+# Глобальное правило типографики для всех инфографик.
+# Manrope — modern geometric sans-serif, slightly rounded, очень
+# популярная open-source гарнитура. Модели её обычно узнают; даже
+# если нет — описание ниже даст схожий стиль.
+FONT_NAME = "Manrope"
+FONT_DESCRIPTION = (
+    "modern geometric sans-serif typeface (Manrope-style): clean, "
+    "slightly rounded letterforms, generous spacing, low contrast, "
+    "neutral and professional"
+)
+
 ASPECT_RATIO: dict[SlotType, str] = {
     SlotType.INFOGRAPHIC: "16:9",
     SlotType.STORY: "1:1",
@@ -102,6 +113,9 @@ def build_prompt(slot: ImageSlot, preset: str | None = None) -> str:
             "Perfectly spelled, fully legible, no typos, no distorted or fake "
             "letters, no gibberish — each numbered item is one block caption:\n"
             f"{blocks}\n"
+            f"Typography for ALL text on the image: {FONT_NAME} font — "
+            f"{FONT_DESCRIPTION}. Use it consistently for both the title "
+            "and block captions. "
             "All text must be crisp and accurate. No extra text. "
             "Sharp, professional, magazine-grade quality."
         )
