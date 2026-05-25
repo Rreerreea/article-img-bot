@@ -472,6 +472,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             "awaiting_edit",
             "awaiting_new_category",
             "awaiting_category_for_photo",
+            "awaiting_style_description",
         ):
             if key != keep:
                 context.user_data.pop(key, None)
@@ -492,7 +493,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             context.user_data.get("awaiting_new_category")
             or context.user_data.get("awaiting_category_for_photo")
         ):
-            _clear_awaiting(context)
+            _clear_awaiting(context, keep="awaiting_style_description")
             name = msg.text.strip().lower()
             if not CATEGORY_NAME_RE.match(name):
                 return await msg.reply_text(
@@ -505,13 +506,36 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                     f"«{name}» — системная категория, уже есть."
                 )
             (cfg.refs_dir / name).mkdir(parents=True, exist_ok=True)
-            await msg.reply_text(
-                f"✅ Категория «{name}» создана.\n"
-                f"В статье используй маркер: `Рис.[{name}] Заголовок`\n"
-                "Чтобы добавить туда фото — пришли картинку и выбери "
-                f"«📁 {name}» в кнопках."
+            # После создания категории — спрашиваем описание стиля.
+            context.user_data["awaiting_style_description"] = name
+            return await msg.reply_text(
+                f"✅ Категория «{name}» создана.\n\n"
+                "Опиши стиль текстом — что должно быть в картинках "
+                "(цвета, настроение, композиция, подход к иллюстрации).\n"
+                "Например: «тёмный фиолетовый фон, неон, изометрия, "
+                "3D премиум, минимум деталей».\n\n"
+                "Это добавится в промпт вместе с рефами — даст модели "
+                "двойной сигнал и стиль будет точнее.\n\n"
+                "Если без описания — напиши `-`."
             )
-            return
+
+        # Ждём описание стиля (после создания новой категории).
+        desc_target = context.user_data.get("awaiting_style_description")
+        if desc_target and msg.text and not msg.text.startswith("/"):
+            _clear_awaiting(context)
+            text = msg.text.strip()
+            if text == "-":
+                return await msg.reply_text(
+                    f"Окей, без описания. Теперь пришли фото — спрошу куда "
+                    "сохранить. Список — /refs."
+                )
+            desc_path = cfg.refs_dir / desc_target / ".style.txt"
+            desc_path.parent.mkdir(parents=True, exist_ok=True)
+            desc_path.write_text(text, encoding="utf-8")
+            return await msg.reply_text(
+                f"✅ Описание сохранено для «{desc_target}».\n"
+                "Теперь пришли фото-рефы — спрошу куда сохранить."
+            )
 
         choice = _choice(update)
         try:

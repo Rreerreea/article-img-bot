@@ -110,13 +110,34 @@ def refs_signature(folder: Path) -> str:
     return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
-def build_prompt(slot: ImageSlot, preset: str | None = None) -> str:
+STYLE_HINT_FOR_REFS = (
+    "VISUAL STYLE: strictly match the colors, palette, lighting, "
+    "composition, illustration approach, and overall mood of the "
+    "provided reference images. Copy their aesthetic precisely — "
+    "do NOT default to generic stock styling."
+)
+
+
+def build_prompt(
+    slot: ImageSlot,
+    preset: str | None = None,
+    *,
+    has_refs: bool = False,
+    style_desc: str = "",
+) -> str:
     """Сильный промпт: модель рисует ВЕСЬ текст сама.
 
     Промпт языко-нейтральный — что прислали, то и рендерим (русский,
     английский, испанский, любой). Никаких хардкодов про язык.
+
+    has_refs: если True — добавляется STYLE_HINT_FOR_REFS (просим строго
+        копировать визуал прикреплённых рефов).
+    style_desc: пользовательский текст-описание стиля (из .style.txt в
+        папке рефов) — добавляется как «User style notes: …».
     """
     style = presets.get(preset)
+    style_hint = STYLE_HINT_FOR_REFS + "\n" if has_refs else ""
+    user_notes = f"User style notes: {style_desc}\n" if style_desc else ""
     if slot.type is SlotType.INFOGRAPHIC:
         n = max(1, len(slot.bullets))
         title = slot.title.strip()
@@ -128,6 +149,7 @@ def build_prompt(slot: ImageSlot, preset: str | None = None) -> str:
         )
         return (
             f"{style.infographic}. 16:9 horizontal cinematic layout.\n"
+            f"{style_hint}{user_notes}"
             "CRITICAL SAFE AREA: the very top ~10% and very bottom ~10% of "
             "the canvas will be cropped. Position the title AND every "
             "content block within the central ~80% vertical region. Leave "
@@ -154,6 +176,7 @@ def build_prompt(slot: ImageSlot, preset: str | None = None) -> str:
     body = ". ".join(b for b in bits if b).strip()
     base = (
         f"{style.story}. 16:9 horizontal cinematic composition. "
+        f"{style_hint}{user_notes}"
         "Keep the main subject within the central ~80% vertical area — "
         "the very top and very bottom of the canvas may be cropped."
     )
@@ -164,10 +187,31 @@ def build(
     slot: ImageSlot, base_refs_dir: Path, preset: str | None = None
 ) -> PromptSpec:
     folder = refs_dir_for(slot, Path(base_refs_dir))
+    # Файл .style.txt в папке рефов — пользовательское описание стиля,
+    # ложится в промпт как «User style notes».
+    style_desc = ""
+    desc_file = folder / ".style.txt"
+    if desc_file.is_file():
+        style_desc = desc_file.read_text(encoding="utf-8").strip()
+    # Есть ли реальные картинки-рефы в этой папке.
+    img_exts = {".png", ".jpg", ".jpeg", ".webp"}
+    has_refs = folder.is_dir() and any(
+        f.is_file() and f.suffix.lower() in img_exts
+        for f in folder.iterdir()
+    )
+    sig = refs_signature(folder)
+    # Версия .style.txt влияет на сигнатуру → смена описания → перегенерация.
+    if style_desc:
+        import hashlib
+        sig = hashlib.sha1(
+            (sig + "|" + style_desc).encode("utf-8")
+        ).hexdigest()[:16]
     return PromptSpec(
-        prompt=build_prompt(slot, preset),
+        prompt=build_prompt(
+            slot, preset, has_refs=has_refs, style_desc=style_desc
+        ),
         aspect_ratio=ASPECT_RATIO[slot.type],
         target_size=TARGET_SIZE[slot.type],
         refs_dir=folder,
-        refs_signature=refs_signature(folder),
+        refs_signature=sig,
     )
