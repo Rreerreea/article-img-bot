@@ -111,10 +111,15 @@ def refs_signature(folder: Path) -> str:
 
 
 STYLE_HINT_FOR_REFS = (
-    "VISUAL STYLE: strictly match the colors, palette, lighting, "
-    "composition, illustration approach, and overall mood of the "
-    "provided reference images. Copy their aesthetic precisely — "
-    "do NOT default to generic stock styling."
+    "STYLE PRIORITY: treat the provided reference images as the absolute "
+    "authority on visual style. Match EVERYTHING from them: medium "
+    "(photography vs. illustration vs. 3D render), color palette, lighting "
+    "direction and quality, level of detail, depth of field, texture, "
+    "background, mood. If refs are photographs — produce a photograph; "
+    "if refs are illustrations — produce an illustration. "
+    "Do NOT add logos, brand marks, cryptocurrency symbols, sparkle/fairy "
+    "light effects, neon glows, or any decorative elements that are not "
+    "present in the references."
 )
 
 
@@ -180,7 +185,7 @@ def build_prompt(
         "SAFE AREA: top ~10% and bottom ~10% may be cropped — keep the "
         "main subject within the central ~80% vertical region.\n"
         f"{preset_line}{style_hint}{user_notes}"
-        + (f"Subject: {body}" if body else "")
+        + (f"Image content: {body}." if body else "")
     ).rstrip()
 
 
