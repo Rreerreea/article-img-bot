@@ -25,6 +25,26 @@ from .models import Estimate, GenerationResult, GenStatus, ImageSlot, SlotType
 from .prompt_builder import PromptSpec
 
 
+def _is_non_retryable(exc: Exception) -> bool:
+    """Ошибки которые ретрай не починит — auth, billing, malformed request.
+    Сетевые/таймауты/rate-limit оставляем ретраиться."""
+    name = type(exc).__name__
+    # Имена классов из openai-python SDK без жёсткого импорта (он опц).
+    if name in {
+        "AuthenticationError",
+        "PermissionDeniedError",
+        "BadRequestError",
+        "NotFoundError",
+        "UnprocessableEntityError",
+    }:
+        return True
+    # Сообщение часто содержит маркер квоты — это тоже стоп.
+    msg = str(exc).lower()
+    if "billing_hard_limit" in msg or "insufficient_quota" in msg:
+        return True
+    return False
+
+
 class HiggsfieldWorker:
     def __init__(self, config: Config) -> None:
         self.cfg = config
@@ -82,11 +102,15 @@ class HiggsfieldWorker:
                 )
             except Exception as exc:  # noqa: BLE001 — фиксируем и ретраим
                 last_error = exc
+                # Не-восстановимые ошибки — ретраить бессмысленно, только
+                # сжигаем время и (для платных) деньги. Выходим сразу.
+                if _is_non_retryable(exc):
+                    break
 
         return GenerationResult(
             slot.id,
             GenStatus.FAILED,
-            attempts=self.cfg.max_retries + 1,
+            attempts=attempt,
             error=str(last_error),
         )
 
@@ -101,6 +125,15 @@ class HiggsfieldWorker:
         progress_cb(done, total) — опц., зовётся после каждого слота
         (для прогресс-сообщения в боте). Может быть sync или async.
         """
+        # Защитная проверка диска до того как сжигать API-копейки. Меньше
+        # 100 MB свободного — кэш+output+ZIP не влезут, лучше упасть заранее
+        # с понятной диагностикой.
+        free_mb = shutil.disk_usage(self.cfg.base_dir).free / 1024 / 1024
+        if free_mb < 100:
+            raise RuntimeError(
+                f"Свободного места на диске мало: {free_mb:.0f} MB. "
+                "Освободи место и попробуй снова."
+            )
         sem = asyncio.Semaphore(self.cfg.concurrency)
         total = len(slots)
         done = 0

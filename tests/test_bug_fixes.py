@@ -120,3 +120,57 @@ def test_dataclasses_replace_doesnt_share_state():
     assert s.category is None  # исходный не мутирован
     assert s2.category == "story"
     assert s.id == s2.id  # id сохраняется
+
+
+def test_is_non_retryable_auth_error():
+    """Auth/billing ошибки не должны ретраиться — деньги жжём впустую."""
+    from src.higgsfield_worker import _is_non_retryable
+
+    class AuthenticationError(Exception):
+        pass
+
+    class BadRequestError(Exception):
+        pass
+
+    class APITimeoutError(Exception):
+        pass
+
+    assert _is_non_retryable(AuthenticationError("invalid api key")) is True
+    assert _is_non_retryable(BadRequestError("file too large")) is True
+    # Сетевые/таймауты — ретраим.
+    assert _is_non_retryable(APITimeoutError("timeout")) is False
+    # Сообщение с billing/quota маркером.
+    assert _is_non_retryable(
+        RuntimeError("billing_hard_limit_reached")
+    ) is True
+    assert _is_non_retryable(
+        RuntimeError("insufficient_quota")
+    ) is True
+
+
+def test_disk_space_check_blocks_generation(tmp_path, monkeypatch):
+    """Меньше 100 MB свободно — выпадает с понятной ошибкой до сжигания
+    API-токенов, а не после череды OSError(ENOSPC) в кэше."""
+    import asyncio
+    import shutil
+    from src.config import Config, Mode, Provider
+    from src.higgsfield_worker import HiggsfieldWorker
+
+    cfg = Config(
+        mode=Mode.MOCK, credentials="", model="x", quality="economy",
+        concurrency=1, max_retries=0, price_per_image=0.0,
+        base_dir=tmp_path, provider=Provider.GEMINI,
+    )
+    w = HiggsfieldWorker(cfg)
+
+    class FakeUsage:
+        free = 50 * 1024 * 1024  # 50 MB — мало
+
+    monkeypatch.setattr(shutil, "disk_usage", lambda _: FakeUsage())
+    slot = ImageSlot(
+        id="x", title="T", bullets=("a",), type=SlotType.INFOGRAPHIC
+    )
+    with pytest.raises(RuntimeError, match="свободного места на диске мало|Свободного места"):
+        asyncio.get_event_loop().run_until_complete(
+            w.generate_batch([slot])
+        )

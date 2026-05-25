@@ -388,10 +388,12 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
 
             ok = [r for r in result.results if r.ok and r.file_path]
             # Превью альбомом (сжато, быстро глянуть в чате), по 10.
+            # Читаем в память сразу — на одной картинке ~1-2 MB, безопасно;
+            # зато file handle закрывается до await, не утечёт при ошибке.
             for i in range(0, len(ok), 10):
                 chunk = ok[i:i + 10]
                 media = [
-                    InputMediaPhoto(open(r.file_path, "rb")) for r in chunk
+                    InputMediaPhoto(r.file_path.read_bytes()) for r in chunk
                 ]
                 if media:
                     try:
@@ -399,11 +401,12 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                     except Exception as exc:  # noqa: BLE001
                         log.warning("media_group failed: %s", exc)
             # Архив документом — оригиналы без сжатия.
-            await chat_msg.reply_document(
-                document=open(result.zip_path, "rb"),
-                filename="images.zip",
-                caption="📦 Оригиналы без сжатия — в архиве.",
-            )
+            with open(result.zip_path, "rb") as zf:
+                await chat_msg.reply_document(
+                    document=zf,
+                    filename="images.zip",
+                    caption="📦 Оригиналы без сжатия — в архиве.",
+                )
             ids = [r.slot_id for r in ok]
             kb = _edit_kb(ids, context)
             if kb:
@@ -463,11 +466,12 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 "Сгенерируй пачку заново."
             )
         await status.edit_text(f"«{slot_id}» готов: ▰  1 из 1")
-        await message.reply_document(
-            document=open(path, "rb"),
-            filename=f"{slot_id}.png",
-            caption=f"Готово: {slot_id} — {instruction}",
-        )
+        with open(path, "rb") as fh:
+            await message.reply_document(
+                document=fh,
+                filename=f"{slot_id}.png",
+                caption=f"Готово: {slot_id} — {instruction}",
+            )
 
     def _clear_awaiting(context, *, keep: str | None = None) -> None:
         """Сбрасывает все awaiting_* флаги кроме `keep`. Защищает от
@@ -603,6 +607,10 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             )
 
         context.user_data["slots"] = slots
+        # Бэкап оригинальных слотов для translate-flow: чтобы повторный
+        # перевод (RU→EN→RU и т.п.) шёл из исходного текста статьи, а
+        # не из уже-переведённого user_data["slots"].
+        context.user_data["slots_original"] = slots
         style_name = _ref_style(update)
         style_label = _ref_style_label(style_name)
         m_label = choice.label
@@ -855,8 +863,15 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             lang_label = LANG_LABELS.get(code)
             if not lang_label:
                 return await q.edit_message_text("Этот язык я не знаю.")
-            slots = context.user_data.get("slots") or []
-            if not slots:
+            # ИСТОЧНИК — всегда оригиналы, не переведённая копия.
+            # Иначе RU→EN→DE перевёл бы английский в немецкий и накопил
+            # бы дрейф; теперь каждый перевод стартует с исходного русского.
+            source = (
+                context.user_data.get("slots_original")
+                or context.user_data.get("slots")
+                or []
+            )
+            if not source:
                 return await q.edit_message_text(
                     "Слоты потерялись (рестарт?). Пришли статью заново."
                 )
@@ -865,11 +880,12 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             )
             try:
                 new_slots = await translator.translate_slots(
-                    slots, lang_label, cfg.openai_api_key
+                    source, lang_label, cfg.openai_api_key
                 )
             except Exception as exc:  # noqa: BLE001
+                log.exception("translate failed for lang=%s", lang_label)
                 return await q.message.reply_text(
-                    f"Перевод не удался ({type(exc).__name__}): {str(exc)[:120]}"
+                    f"Перевод не удался ({type(exc).__name__}): {str(exc)[:200]}"
                 )
             context.user_data["slots"] = new_slots
             await q.message.reply_text(
