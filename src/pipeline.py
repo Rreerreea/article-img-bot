@@ -94,9 +94,12 @@ class PipelineService:
         preset: str | None = None,
         progress_cb=None,
         choice: ModelChoice | None = None,
+        slot_done_cb=None,
     ) -> RunResult:
         worker = self._worker_for(choice)
-        results = await worker.generate_batch(slots, preset, progress_cb)
+        results = await worker.generate_batch(
+            slots, preset, progress_cb, slot_done_cb=slot_done_cb,
+        )
         zip_path = self._build_zip(results)
         return RunResult(zip_path=zip_path, results=results)
 

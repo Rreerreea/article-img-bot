@@ -119,11 +119,14 @@ class HiggsfieldWorker:
         slots: list[ImageSlot],
         preset: str | None = None,
         progress_cb=None,
+        slot_done_cb=None,
     ) -> list[GenerationResult]:
         """Пачка с лимитом конкурентности (TZ: ~10–30 слотов потоком).
 
-        progress_cb(done, total) — опц., зовётся после каждого слота
-        (для прогресс-сообщения в боте). Может быть sync или async.
+        progress_cb(done, total) — опц., прогресс-бар в боте.
+        slot_done_cb(result) — опц., вызывается СРАЗУ как готов каждый
+            слот (стримим файл юзеру не дожидаясь всей пачки). Может
+            быть sync или async.
         """
         # Защитная проверка диска до того как сжигать API-копейки. Меньше
         # 100 MB свободного — кэш+output+ZIP не влезут, лучше упасть заранее
@@ -145,6 +148,10 @@ class HiggsfieldWorker:
             done += 1
             if progress_cb is not None:
                 out = progress_cb(done, total)
+                if asyncio.iscoroutine(out):
+                    await out
+            if slot_done_cb is not None:
+                out = slot_done_cb(res)
                 if asyncio.iscoroutine(out):
                     await out
             return res

@@ -271,9 +271,23 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
     async def start(update, context):
         if not _guarded(update, wl):
             return await _deny(update)
-        # Сбрасываем running-флаг если он залип после краша/OOM-килла:
-        # без этого юзер навсегда залочен в «уже генерю».
-        context.user_data.pop("running", None)
+        # Чистая сессия: сбрасываем running (залип после краша/OOM),
+        # очередь streaming-слотов, флаги ожидания. Рефы и выбор модели
+        # сохраняем — они на чат, не на сессию.
+        for k in (
+            "running",
+            "slot_queue",
+            "showing_slot",
+            "gen_done",
+            "result_zip_path",
+            "slots",
+            "slots_original",
+            "awaiting_edit",
+            "awaiting_new_category",
+            "awaiting_category_for_photo",
+            "awaiting_style_description",
+        ):
+            context.user_data.pop(k, None)
         await update.message.reply_text(START_TEXT)
 
     async def on_help(update, context):
@@ -367,8 +381,51 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 "gen start user=%s slots=%d model=%s style=%s",
                 user_id, total, choice.label, style_name,
             )
-            result = await service.run(slots, preset=preset,
-                                       progress_cb=progress, choice=choice)
+
+            # Стрим по одной с gating: пока юзер не тапнул ОК на текущей
+            # картинке, следующая не показывается. Сохраняем в user_data
+            # чтобы callback'и могли двигать очередь.
+            context.user_data["slot_queue"] = []
+            context.user_data["showing_slot"] = None
+            context.user_data["gen_done"] = False
+            context.user_data["chat_id"] = chat_msg.chat_id
+
+            async def _send_one(slot_id: str, file_path: Path):
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "✅ ОК", callback_data=f"slotok:{slot_id}"
+                    ),
+                    InlineKeyboardButton(
+                        "✏️ Внести правки", callback_data=f"edit:{slot_id}"
+                    ),
+                ]])
+                try:
+                    with open(file_path, "rb") as fh:
+                        await chat_msg.reply_document(
+                            document=fh,
+                            filename=f"{slot_id}.png",
+                            caption=f"📄 {slot_id}",
+                            reply_markup=kb,
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("stream send failed for %s: %s", slot_id, exc)
+
+            async def _slot_done(res):
+                if not (res.ok and res.file_path and res.file_path.exists()):
+                    return
+                if context.user_data.get("showing_slot") is None:
+                    context.user_data["showing_slot"] = res.slot_id
+                    await _send_one(res.slot_id, res.file_path)
+                else:
+                    context.user_data["slot_queue"].append({
+                        "slot_id": res.slot_id,
+                        "file_path": str(res.file_path),
+                    })
+
+            result = await service.run(
+                slots, preset=preset, progress_cb=progress,
+                choice=choice, slot_done_cb=_slot_done,
+            )
             log.info(
                 "gen done user=%s ok=%d cached=%d failed=%d zip=%s",
                 user_id, result.ok, result.from_cache, result.failed,
@@ -379,43 +436,43 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                     log.warning("slot %s failed: %s", r.slot_id, r.error)
 
             if result.zip_path is None:
+                context.user_data["gen_done"] = True
                 return await status.edit_text(
                     "😕 Ни одной картинки не вышло. " + result.human()
                     + "\nПопробуй другую статью или /start."
                 )
             await status.edit_text(f"✅ Готово! {result.human()}")
+            context.user_data["gen_done"] = True
+            context.user_data["result_zip_path"] = str(result.zip_path)
+            # Если юзер уже всё протапал — сразу шлём ZIP + translate.
+            # Иначе финал отправит slotok-callback после последнего ОК.
+            if (
+                context.user_data.get("showing_slot") is None
+                and not context.user_data.get("slot_queue")
+            ):
+                await _send_final_artifacts(chat_msg, context)
+        finally:
+            context.user_data["running"] = False
 
-            ok = [r for r in result.results if r.ok and r.file_path]
-            # Превью альбомом (сжато, быстро глянуть в чате), по 10.
-            # Читаем в память сразу — на одной картинке ~1-2 MB, безопасно;
-            # зато file handle закрывается до await, не утечёт при ошибке.
-            for i in range(0, len(ok), 10):
-                chunk = ok[i:i + 10]
-                media = [
-                    InputMediaPhoto(r.file_path.read_bytes()) for r in chunk
-                ]
-                if media:
-                    try:
-                        await chat_msg.reply_media_group(media=media)
-                    except Exception as exc:  # noqa: BLE001
-                        log.warning("media_group failed: %s", exc)
-            # Архив документом — оригиналы без сжатия.
-            with open(result.zip_path, "rb") as zf:
-                await chat_msg.reply_document(
-                    document=zf,
-                    filename="images.zip",
-                    caption="📦 Оригиналы без сжатия — в архиве.",
-                )
-            ids = [r.slot_id for r in ok]
-            kb = _edit_kb(ids, context)
-            if kb:
-                hint = (
-                    "Поправить картинку? Выбери:"
-                    if choice.supports_edit else
-                    "Поправить картинку? Выбери (перегенерация ~"
-                    f"${choice.price_per_image:.2f}/шт):"
-                )
-                await chat_msg.reply_text(hint, reply_markup=kb)
+    async def _send_final_artifacts(chat_msg, context):
+        """ZIP + кнопка перевода. Зовётся когда все слоты протапаны юзером
+        и генерация завершена. Чистим streaming-state чтобы следующая
+        пачка стартовала с чистой очередью."""
+        zip_path = context.user_data.pop("result_zip_path", None)
+        context.user_data.pop("slot_queue", None)
+        context.user_data.pop("showing_slot", None)
+        context.user_data.pop("gen_done", None)
+        if zip_path:
+            try:
+                with open(zip_path, "rb") as zf:
+                    await chat_msg.reply_document(
+                        document=zf,
+                        filename="images.zip",
+                        caption="📦 Все картинки одним архивом.",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("zip send failed: %s", exc)
+        try:
             await chat_msg.reply_text(
                 "Хочешь версию на другом языке?",
                 reply_markup=InlineKeyboardMarkup(
@@ -424,8 +481,42 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                     )]]
                 ),
             )
-        finally:
-            context.user_data["running"] = False
+        except Exception as exc:  # noqa: BLE001
+            log.warning("final translate button failed: %s", exc)
+
+    async def _advance_queue(chat_msg, context):
+        """После ОК или edit — двигаем очередь дальше."""
+        queue = context.user_data.get("slot_queue") or []
+        if queue:
+            nxt = queue.pop(0)
+            context.user_data["slot_queue"] = queue
+            context.user_data["showing_slot"] = nxt["slot_id"]
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "✅ ОК", callback_data=f"slotok:{nxt['slot_id']}"
+                ),
+                InlineKeyboardButton(
+                    "✏️ Внести правки", callback_data=f"edit:{nxt['slot_id']}"
+                ),
+            ]])
+            try:
+                with open(nxt["file_path"], "rb") as fh:
+                    await chat_msg.reply_document(
+                        document=fh,
+                        filename=f"{nxt['slot_id']}.png",
+                        caption=f"📄 {nxt['slot_id']}",
+                        reply_markup=kb,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("advance_queue send failed: %s", exc)
+                # Пропускаем поломанный и пробуем следующий.
+                context.user_data["showing_slot"] = None
+                await _advance_queue(chat_msg, context)
+            return
+        # Очередь пуста.
+        context.user_data["showing_slot"] = None
+        if context.user_data.get("gen_done"):
+            await _send_final_artifacts(chat_msg, context)
 
     async def on_go(update, context):
         if not _guarded(update, wl):
@@ -771,15 +862,33 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             return await q.edit_message_text(
                 f"Модель: {choice_obj.label}. Пришли статью — посчитаю смету."
             )
+        if data.startswith("slotok:"):
+            sid = data.split(":", 1)[1]
+            # Снимаем кнопки у текущего файла (визуально «принято»).
+            try:
+                await q.edit_message_reply_markup(reply_markup=None)
+            except Exception:  # noqa: BLE001
+                pass
+            if context.user_data.get("showing_slot") == sid:
+                await _advance_queue(q.message, context)
+            return
         if data.startswith("edit:"):
-            idx = data.split(":", 1)[1]
-            sid = (context.user_data.get("edit_map") or {}).get(idx)
-            if not sid:
-                return await q.edit_message_text(
-                    "Эта картинка уже неактуальна — сгенерируй заново."
+            sid = data.split(":", 1)[1]
+            # Проверяем что слот вообще существует на диске.
+            if not (cfg.output_dir / f"{sid}.png").exists():
+                return await q.message.reply_text(
+                    f"Картинка «{sid}» не найдена — сгенерируй заново."
                 )
             _clear_awaiting(context, keep="awaiting_edit")
             context.user_data["awaiting_edit"] = sid
+            # Снимаем кнопки у этого слота и двигаем очередь — edit пойдёт
+            # параллельно, не блокируя поток картинок.
+            try:
+                await q.edit_message_reply_markup(reply_markup=None)
+            except Exception:  # noqa: BLE001
+                pass
+            if context.user_data.get("showing_slot") == sid:
+                await _advance_queue(q.message, context)
             return await q.message.reply_text(
                 f"Что изменить в «{sid}»? Напиши текстом "
                 "(например: сделай фон темнее, убери иконку)."
