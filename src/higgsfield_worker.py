@@ -307,24 +307,64 @@ class HiggsfieldWorker:
     # ---- OpenAI GPT Image 2 (силён в тексте) -----------------------------
 
     async def _generate_openai(self, spec: PromptSpec) -> bytes:
-        """OpenAI GPT Image 2. API сверён с openai SDK 2.37 (2026-05-19):
-        client.images.generate -> data[0].b64_json. Размер из доступных
-        OpenAI; postprocess приводит к target (TZ 7.5). Рефы — через
-        images.edit (отдельный метод), не входит в базовый t2i.
+        """OpenAI GPT Image 2.
+
+        Если в папке рефов есть картинки — идём через images.edit с
+        ними как стилистическими примерами (модель видит визуал).
+        Если рефов нет — обычный images.generate (только текст).
+        Размер из доступных OpenAI; postprocess приводит к target.
         """
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI(api_key=self.cfg.openai_api_key or None)
         size = "1536x1024" if spec.aspect_ratio == "16:9" else "1024x1024"
 
-        resp = await client.images.generate(
-            model=self.cfg.openai_model,
-            prompt=spec.prompt,
-            size=size,
-            quality=self.cfg.openai_quality,
-            n=1,
-        )
+        refs = self._load_ref_payloads(spec.refs_dir, limit=4)
+        if refs:
+            resp = await client.images.edit(
+                model=self.cfg.openai_model,
+                image=refs,
+                prompt=spec.prompt,
+                size=size,
+                quality=self.cfg.openai_quality,
+                n=1,
+            )
+        else:
+            resp = await client.images.generate(
+                model=self.cfg.openai_model,
+                prompt=spec.prompt,
+                size=size,
+                quality=self.cfg.openai_quality,
+                n=1,
+            )
         return self._extract_openai_bytes(resp)
+
+    @staticmethod
+    def _load_ref_payloads(refs_dir, limit: int = 4) -> list:
+        """Рефы для OpenAI images.edit: список (имя, байты, mime).
+
+        SDK принимает file-like / tuple-payload по спецификации openai-python.
+        Возвращаем максимум `limit` файлов из refs_dir.
+        """
+        from pathlib import Path
+
+        folder = Path(refs_dir)
+        if not folder.is_dir():
+            return []
+        mime = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+        }
+        out: list = []
+        for f in sorted(folder.iterdir()):
+            ext = f.suffix.lower()
+            if ext in mime and f.is_file():
+                out.append((f.name, f.read_bytes(), mime[ext]))
+                if len(out) >= limit:
+                    break
+        return out
 
     @staticmethod
     def _extract_openai_bytes(resp) -> bytes:
