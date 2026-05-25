@@ -24,7 +24,7 @@ def _story() -> ImageSlot:
 def test_infographic_spec(tmp_path):
     spec = build(_infographic(), tmp_path / "refs")
     assert spec.aspect_ratio == "16:9"
-    assert spec.target_size == (1280, 720)
+    assert spec.target_size == (1536, 864)
     assert spec.refs_dir.name == "infographic"
     # Решение Гоши: нейросеть рисует ВЕСЬ текст — даём точный
     # контент дословно + требование аккуратной кириллицы.
@@ -36,8 +36,8 @@ def test_infographic_spec(tmp_path):
 
 def test_story_spec(tmp_path):
     spec = build(_story(), tmp_path / "refs")
-    assert spec.aspect_ratio == "1:1"
-    assert spec.target_size == (1024, 1024)
+    assert spec.aspect_ratio == "16:9"
+    assert spec.target_size == (1536, 864)
     assert spec.refs_dir.name == "story"
 
 
@@ -90,4 +90,4 @@ async def test_generated_file_matches_target_size(cfg):
     """Сквозная проверка: воркер+билдер+постобработка в MOCK."""
     w = HiggsfieldWorker(cfg)
     res = await w.generate_one(_infographic())
-    assert Image.open(io.BytesIO(res.file_path.read_bytes())).size == (1280, 720)
+    assert Image.open(io.BytesIO(res.file_path.read_bytes())).size == (1536, 864)

@@ -13,7 +13,7 @@ from src.models import ImageSlot, SlotType
 from src.pipeline import PipelineService
 
 
-def _png(size=(1280, 720)) -> bytes:
+def _png(size=(1536, 864)) -> bytes:
     b = io.BytesIO()
     Image.new("RGB", size, (100, 110, 120)).save(b, format="PNG")
     return b.getvalue()
@@ -33,7 +33,7 @@ async def test_edit_image_mock_changes_keeps_size(tmp_path):
     src = _png()
     out = await w.edit_image(src, "сделай темнее")
     assert out != src
-    assert Image.open(io.BytesIO(out)).size == (1280, 720)
+    assert Image.open(io.BytesIO(out)).size == (1536, 864)
 
 
 async def test_edit_image_non_gemini_real_raises(tmp_path):
@@ -57,7 +57,7 @@ async def test_pipeline_edit_roundtrip(tmp_path):
     assert path is not None and path.exists()
     after = path.read_bytes()
     assert after != before                       # правка применена
-    assert Image.open(io.BytesIO(after)).size == (1280, 720)  # размер сохранён
+    assert Image.open(io.BytesIO(after)).size == (1536, 864)  # размер сохранён
 
 
 async def test_pipeline_edit_missing_slot_returns_none(tmp_path):

@@ -279,6 +279,9 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
     async def start(update, context):
         if not _guarded(update, wl):
             return await _deny(update)
+        # Сбрасываем running-флаг если он залип после краша/OOM-килла:
+        # без этого юзер навсегда залочен в «уже генерю».
+        context.user_data.pop("running", None)
         await update.message.reply_text(START_TEXT)
 
     async def on_help(update, context):
@@ -311,14 +314,16 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         try:
             preset = _preset(update)
             choice = _choice(update)
-            # Применяем оверрайд категории рефов (выбран в кнопке «🎨 Стиль»).
+            # Оверрайд категории рефов (кнопка «🎨 Стиль») — только в
+            # ЛОКАЛЬНОЙ копии. НЕ синкаем обратно в user_data: иначе при
+            # повторных запусках/переводах оригиналы из статьи теряются
+            # и стиль навсегда залипает.
             style_name = _ref_style(update)
             if style_name and style_name != "auto":
                 import dataclasses
                 slots = [
                     dataclasses.replace(s, category=style_name) for s in slots
                 ]
-                context.user_data["slots"] = slots  # синк с persistence
             total = len(slots)
             model_name = choice.label.split(" ~")[0]
 
@@ -493,20 +498,21 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             context.user_data.get("awaiting_new_category")
             or context.user_data.get("awaiting_category_for_photo")
         ):
-            _clear_awaiting(context, keep="awaiting_style_description")
             name = msg.text.strip().lower()
             if not CATEGORY_NAME_RE.match(name):
+                # Не чистим awaiting_* — даём юзеру шанс ввести валидное
+                # имя без потери pending-фото / нового пути.
                 return await msg.reply_text(
                     "Имя не подходит. Только латиница, цифры и `_`, "
-                    "начинать с буквы, до 30 символов. Попробуй ещё раз "
-                    "через /refs → ➕ Новая категория."
+                    "начинать с буквы, до 30 символов. Попробуй ещё раз."
                 )
             if name in SYSTEM_CATEGORIES:
                 return await msg.reply_text(
                     f"«{name}» — системная категория, уже есть."
                 )
+            # Только тут — после успешной валидации — сбрасываем флаги.
+            _clear_awaiting(context, keep="awaiting_style_description")
             (cfg.refs_dir / name).mkdir(parents=True, exist_ok=True)
-            # После создания категории — спрашиваем описание стиля.
             context.user_data["awaiting_style_description"] = name
             return await msg.reply_text(
                 f"✅ Категория «{name}» создана.\n\n"
@@ -522,16 +528,25 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         # Ждём описание стиля (после создания новой категории).
         desc_target = context.user_data.get("awaiting_style_description")
         if desc_target and msg.text and not msg.text.startswith("/"):
-            _clear_awaiting(context)
             text = msg.text.strip()
             if text == "-":
+                _clear_awaiting(context)
                 return await msg.reply_text(
                     f"Окей, без описания. Теперь пришли фото — спрошу куда "
                     "сохранить. Список — /refs."
                 )
             desc_path = cfg.refs_dir / desc_target / ".style.txt"
-            desc_path.parent.mkdir(parents=True, exist_ok=True)
-            desc_path.write_text(text, encoding="utf-8")
+            try:
+                desc_path.parent.mkdir(parents=True, exist_ok=True)
+                desc_path.write_text(text, encoding="utf-8")
+            except OSError as exc:
+                log.exception("style desc write failed for %s", desc_target)
+                # Флаг не чистим — даём шанс повторить ввод.
+                return await msg.reply_text(
+                    f"Не получилось сохранить описание ({type(exc).__name__}): "
+                    f"{str(exc)[:120]}\nПопробуй ещё раз."
+                )
+            _clear_awaiting(context)
             return await msg.reply_text(
                 f"✅ Описание сохранено для «{desc_target}».\n"
                 "Теперь пришли фото-рефы — спрошу куда сохранить."
@@ -903,14 +918,21 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             if "/" in filename or ".." in filename:
                 return await q.edit_message_caption(caption="Подозрительное имя файла.")
             target = _refs_dir(kind) / filename
+            async def _ack_delete(text: str) -> None:
+                # Старые сообщения нельзя edit_message_caption (>48h
+                # лимит Telegram). Падаем в reply_text — UX ок,
+                # действие подтверждается.
+                try:
+                    await q.edit_message_caption(caption=text)
+                except Exception:  # noqa: BLE001
+                    try:
+                        await q.message.reply_text(text)
+                    except Exception:  # noqa: BLE001
+                        log.warning("refs:del ack failed for %s", filename)
             if not target.exists():
-                return await q.edit_message_caption(
-                    caption=f"❎ {filename} — уже нет."
-                )
+                return await _ack_delete(f"❎ {filename} — уже нет.")
             target.unlink()
-            return await q.edit_message_caption(
-                caption=f"🗑 Удалено: {filename}"
-            )
+            return await _ack_delete(f"🗑 Удалено: {filename}")
 
     async def on_error(update, context):
         err = getattr(context, "error", None)

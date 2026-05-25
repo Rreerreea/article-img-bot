@@ -192,7 +192,12 @@ def build(
     style_desc = ""
     desc_file = folder / ".style.txt"
     if desc_file.is_file():
-        style_desc = desc_file.read_text(encoding="utf-8").strip()
+        try:
+            style_desc = desc_file.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            # Битый файл (кодировка, перм) — просто игнорируем, не валим
+            # генерацию. Свежий .style.txt от бота всегда utf-8.
+            style_desc = ""
     # Есть ли реальные картинки-рефы в этой папке.
     img_exts = {".png", ".jpg", ".jpeg", ".webp"}
     has_refs = folder.is_dir() and any(

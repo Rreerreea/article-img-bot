@@ -43,7 +43,16 @@ def load_article(path: str | Path) -> str:
 
         with open(p, "rb") as fh:
             result = mammoth.convert_to_markdown(fh)
-        return _clean_markdown(result.value)
+        text = _clean_markdown(result.value or "")
+        # Если очистка дала пустоту — это не «нет маркеров», это битый
+        # input. Скажем юзеру по-человечески, иначе он зависнет в попытках.
+        if not text.strip():
+            raise RuntimeError(
+                "Файл .docx прочитался, но текста внутри не нашлось "
+                "(возможно, картинки-сканы без OCR или сложный layout). "
+                "Попробуй сохранить как .md или .txt."
+            )
+        return text
 
     raise ValueError(
         f"Неподдерживаемое расширение: {ext}. Допустимы: {sorted(SUPPORTED_EXT)}"

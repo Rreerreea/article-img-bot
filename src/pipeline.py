@@ -118,14 +118,12 @@ class PipelineService:
         """Правка картинки.
 
         Стратегия:
-        - Если модель умеет img2img (Gemini Nano Banana) — нативная правка,
-          композиция сохраняется почти идеально.
-        - Если не умеет (OpenAI) — перегенерация: к исходному промпту слота
-          приклеивается инструкция-правка, модель рисует заново. Композиция
-          может уехать, но изменение применится. Нужен slot+preset для
-          реконструкции промпта.
+        1) Пробуем нативный img2img у воркера (Gemini Nano Banana умеет,
+           MOCK тоже работает всегда).
+        2) Если воркер сказал «не поддерживаю» (RuntimeError) — фолбэк
+           на перегенерацию с инструкцией в промпте (нужен slot+preset).
 
-        None — если картинки нет или нет данных для перегенерации.
+        None — если картинки нет или фолбэк невозможен.
         """
         from . import postprocess, prompt_builder
 
@@ -135,18 +133,22 @@ class PipelineService:
 
         worker = self._worker_for(choice)
 
-        # Нативная правка (img2img) если умеет модель — лучше композиция.
-        if choice is not None and choice.supports_edit:
+        # Сначала пробуем нативную правку: единственный путь который
+        # сохраняет композицию точно. В MOCK работает всегда; в REAL
+        # — пока только Gemini.
+        try:
             from PIL import Image
             size = Image.open(src).size
             data = await worker.edit_image(src.read_bytes(), instruction)
             data = postprocess.normalize(data, size)
             src.write_bytes(data)
             return src
+        except RuntimeError:
+            # Воркер явно сказал «не умею» (OpenAI, Higgsfield в REAL).
+            # Пробуем фолбэк — перегенерация с инструкцией.
+            if slot is None:
+                return None
 
-        # Фолбэк: перегенерация с инструкцией в промпте.
-        if slot is None:
-            return None  # без слота не восстановим контекст
         base_spec = prompt_builder.build(slot, self.cfg.refs_dir, preset)
         merged_prompt = (
             f"{base_spec.prompt}\n\n"
