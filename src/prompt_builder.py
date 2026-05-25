@@ -23,10 +23,11 @@ from . import presets
 from .models import ImageSlot, SlotType
 
 TARGET_SIZE: dict[SlotType, tuple[int, int]] = {
-    # 3:2 — близко к нативным OpenAI 1536x1024 и Gemini, постпроцесс
-    # не режет содержимое; раньше 1280x720 (16:9) обрезал низ инфографик.
-    SlotType.INFOGRAPHIC: (1536, 1024),
-    SlotType.STORY: (1024, 1024),       # квадрат — образная сцена
+    # 16:9 для всех — общий рефы-стайл (Гоша зафиксировал).
+    # OpenAI gpt-image-2 рисует 1536x1024 (3:2), постпроцесс кропит до 1536x864.
+    # Gemini-модели слушаются «16:9» из промпта.
+    SlotType.INFOGRAPHIC: (1536, 864),
+    SlotType.STORY: (1536, 864),
 }
 
 # Глобальное правило типографики для всех инфографик.
@@ -65,7 +66,7 @@ def resolve_category(name: str | None) -> str | None:
 
 ASPECT_RATIO: dict[SlotType, str] = {
     SlotType.INFOGRAPHIC: "16:9",
-    SlotType.STORY: "1:1",
+    SlotType.STORY: "16:9",
 }
 
 
