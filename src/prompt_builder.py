@@ -127,7 +127,12 @@ def build_prompt(slot: ImageSlot, preset: str | None = None) -> str:
             f"Prominent title at the top: «{title}».\n" if title else ""
         )
         return (
-            f"{style.infographic}. 16:9 horizontal layout.\n"
+            f"{style.infographic}. 16:9 horizontal cinematic layout.\n"
+            "CRITICAL SAFE AREA: the very top ~10% and very bottom ~10% of "
+            "the canvas will be cropped. Position the title AND every "
+            "content block within the central ~80% vertical region. Leave "
+            "GENEROUS empty margin (decorative background only) at the very "
+            "top and very bottom — no text, no critical illustrations there.\n"
             f"{title_line}"
             f"{n} content blocks in a well-structured layout; each block has "
             "a distinctive custom thematic illustration (cryptocurrency, "
@@ -147,7 +152,11 @@ def build_prompt(slot: ImageSlot, preset: str | None = None) -> str:
     # Сюжетная: образная иллюстрация по смыслу (текст не нужен).
     bits = [slot.title, *slot.bullets]
     body = ". ".join(b for b in bits if b).strip()
-    base = f"{style.story}. 16:9 horizontal cinematic composition."
+    base = (
+        f"{style.story}. 16:9 horizontal cinematic composition. "
+        "Keep the main subject within the central ~80% vertical area — "
+        "the very top and very bottom of the canvas may be cropped."
+    )
     return f"{base} Scene: {body}" if body else base
 
 
