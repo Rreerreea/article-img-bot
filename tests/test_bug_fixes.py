@@ -148,6 +148,57 @@ def test_is_non_retryable_auth_error():
     ) is True
 
 
+def test_two_bullets_default_is_story():
+    """Регрессия «Карточка в сейфе»: 2 буллета должны быть STORY (scene),
+    не INFOGRAPHIC (grid). Иначе бот вшивает заголовок+номера в картинку."""
+    from src.classifier import classify_type
+    assert classify_type("Карточка в сейфе", ["Сейф", "Внутри keycard"]) is SlotType.STORY
+
+
+def test_four_bullets_default_is_infographic():
+    """Длинный перечень (4+) всё ещё инфографика по умолчанию."""
+    from src.classifier import classify_type
+    assert classify_type("Функции", ["a", "b", "c", "d"]) is SlotType.INFOGRAPHIC
+
+
+def test_explicit_grid_alias_overrides_few_bullets():
+    """`Рис.[grid]` форсит INFOGRAPHIC даже с 1 буллетом."""
+    text = "Рис.[grid] Тест\n• один пункт\n"
+    slots = parse(text)
+    assert len(slots) == 1
+    assert slots[0].type is SlotType.INFOGRAPHIC
+
+
+def test_explicit_infographic_overrides_few_bullets():
+    """`Рис.[infographic]` форсит INFOGRAPHIC при 2 буллетах."""
+    text = "Рис.[infographic] X\n• a\n• b\n"
+    slots = parse(text)
+    assert slots[0].type is SlotType.INFOGRAPHIC
+
+
+def test_explicit_scene_overrides_many_bullets():
+    """`Рис.[scene]` форсит STORY даже при 7 буллетах."""
+    text = "Рис.[scene] X\n• a\n• b\n• c\n• d\n• e\n• f\n• g\n"
+    slots = parse(text)
+    assert slots[0].type is SlotType.STORY
+
+
+def test_explicit_story_overrides_many_bullets():
+    """`Рис.[story]` форсит STORY (как алиас scene)."""
+    text = "Рис.[story] X\n• a\n• b\n• c\n• d\n• e\n"
+    slots = parse(text)
+    assert slots[0].type is SlotType.STORY
+
+
+def test_custom_category_does_not_force_type():
+    """Кастомная категория `[characters]` сама по себе не меняет тип —
+    только подтягивает свою папку рефов. С 2 буллетами — STORY (default)."""
+    text = "Рис.[characters] Босс\n• в офисе\n• улыбается\n"
+    slots = parse(text)
+    assert slots[0].type is SlotType.STORY
+    assert slots[0].category == "characters"
+
+
 def test_disk_space_check_blocks_generation(tmp_path, monkeypatch):
     """Меньше 100 MB свободно — выпадает с понятной ошибкой до сжигания
     API-токенов, а не после череды OSError(ENOSPC) в кэше."""

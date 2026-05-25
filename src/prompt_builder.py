@@ -45,15 +45,20 @@ FONT_DESCRIPTION = (
 # вместо `Рис.[story]`. Пользовательские категории — только латиница, как
 # создал, без алиасов.
 CATEGORY_ALIASES = {
+    # → story (scene-режим: одна цельная картинка)
     "story": "story",
+    "scene": "story",
     "сюжет": "story",
     "сюжетная": "story",
     "сюжетные": "story",
-    "scene": "story",
+    "сцена": "story",
+    # → infographic (grid-режим: заголовок + N номерованных блоков)
     "infographic": "infographic",
+    "grid": "infographic",
+    "info": "infographic",
     "инфографика": "infographic",
     "инфографики": "infographic",
-    "info": "infographic",
+    "грид": "infographic",
 }
 
 
@@ -111,15 +116,18 @@ def refs_signature(folder: Path) -> str:
 
 
 STYLE_HINT_FOR_REFS = (
-    "STYLE PRIORITY: treat the provided reference images as the absolute "
-    "authority on visual style. Match EVERYTHING from them: medium "
-    "(photography vs. illustration vs. 3D render), color palette, lighting "
-    "direction and quality, level of detail, depth of field, texture, "
-    "background, mood. If refs are photographs — produce a photograph; "
-    "if refs are illustrations — produce an illustration. "
-    "Do NOT add logos, brand marks, cryptocurrency symbols, sparkle/fairy "
-    "light effects, neon glows, or any decorative elements that are not "
-    "present in the references."
+    "STYLE REFERENCE GUIDE: extract these visual COMPONENTS from the "
+    "reference images and apply them to the NEW subject below — color "
+    "palette, dominant materials and textures, background type and "
+    "composition style, lighting direction and quality, mood, level of "
+    "detail, medium (photography / illustration / 3D render). The "
+    "references are STYLE GUIDES — do NOT copy specific subjects, "
+    "faces, poses, hand positions, clothing, gestures, or compositions "
+    "from them. The new subject is the only literal content; everything "
+    "else is style.\n"
+    "Do NOT add logos, brand marks, cryptocurrency symbols, sparkle or "
+    "fairy light effects, neon glows, or decorative elements that are "
+    "absent from the references."
 )
 
 

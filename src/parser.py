@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 
 from .classifier import classify_type
-from .models import ImageSlot
+from .models import ImageSlot, SlotType
 
 MARKER = re.compile(
     # Опц. ведущий буллет (Word/Docs часто кладёт «- Рис. ...» вместо чистого «Рис.»)
@@ -91,12 +91,23 @@ def parse(text: str) -> list[ImageSlot]:
         idx = len(slots) + 1
         sid = _slug(title, idx, used)
         used.add(sid)
+        # Тип: по умолчанию из классификатора (порог по буллетам),
+        # но категория-алиас может форсировать. `[infographic]`/`[grid]`
+        # → INFOGRAPHIC, `[story]`/`[scene]` → STORY. Кастомные категории
+        # типа `[characters]` тип не меняют — только папку рефов.
+        from .prompt_builder import resolve_category
+        slot_type = classify_type(title, bullets)
+        resolved = resolve_category(category)
+        if resolved == "infographic":
+            slot_type = SlotType.INFOGRAPHIC
+        elif resolved == "story":
+            slot_type = SlotType.STORY
         slots.append(
             ImageSlot(
                 id=sid,
                 title=title,
                 bullets=tuple(bullets),
-                type=classify_type(title, bullets),
+                type=slot_type,
                 category=category,
             )
         )
