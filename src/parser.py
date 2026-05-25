@@ -15,7 +15,9 @@ from .classifier import classify_type
 from .models import ImageSlot
 
 MARKER = re.compile(
-    r"^\s*(?:Рис|Fig|Figure|Pic|Image)\.?\s*(?:\[([^\]]+)\])?\s*(.*)$",
+    # Опц. ведущий буллет (Word/Docs часто кладёт «- Рис. ...» вместо чистого «Рис.»)
+    r"^\s*(?:[•\-\*·–—]\s+)?(?:Рис|Fig|Figure|Pic|Image)\.?\s*"
+    r"(?:\[([^\]]+)\])?\s*(.*)$",
     re.IGNORECASE,
 )
 # Буллет в начале строки: • (docx/HTML), -, *, ·, –, — (Markdown/Docs).

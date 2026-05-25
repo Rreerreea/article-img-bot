@@ -40,6 +40,29 @@ FONT_DESCRIPTION = (
     "neutral and professional"
 )
 
+# Алиасы для системных категорий: позволяет в статье писать `Рис.[Сюжет]`
+# вместо `Рис.[story]`. Пользовательские категории — только латиница, как
+# создал, без алиасов.
+CATEGORY_ALIASES = {
+    "story": "story",
+    "сюжет": "story",
+    "сюжетная": "story",
+    "сюжетные": "story",
+    "scene": "story",
+    "infographic": "infographic",
+    "инфографика": "infographic",
+    "инфографики": "infographic",
+    "info": "infographic",
+}
+
+
+def resolve_category(name: str | None) -> str | None:
+    """Алиас → канон. Неизвестное — возвращаем как есть (юзер-категория)."""
+    if not name:
+        return None
+    low = name.strip().lower()
+    return CATEGORY_ALIASES.get(low, low)
+
 ASPECT_RATIO: dict[SlotType, str] = {
     SlotType.INFOGRAPHIC: "16:9",
     SlotType.STORY: "1:1",
@@ -59,12 +82,13 @@ def refs_dir_for(slot, base_refs_dir: Path) -> Path:
     """Папка рефов для слота.
 
     Если у слота явно указана category (`Рис.[название]` в статье) и
-    эта папка существует — берём её. Иначе fallback на стандартную
-    base/infographic|story по типу слота.
+    эта папка существует — берём её (с раскрытием алиасов: «сюжет»
+    → «story»). Иначе fallback на стандартную base/infographic|story.
     """
     base = Path(base_refs_dir)
-    if getattr(slot, "category", None):
-        custom = base / slot.category
+    cat = resolve_category(getattr(slot, "category", None))
+    if cat:
+        custom = base / cat
         if custom.is_dir():
             return custom
     return base / slot.type.value
