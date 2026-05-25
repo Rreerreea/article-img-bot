@@ -517,6 +517,14 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         context.user_data["showing_slot"] = None
         if context.user_data.get("gen_done"):
             await _send_final_artifacts(chat_msg, context)
+        else:
+            # Генерация ещё идёт — иначе юзер думает что бот завис.
+            try:
+                await chat_msg.reply_text(
+                    "⏳ Жду следующую картинку — модель ещё рисует..."
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("wait notice send failed: %s", exc)
 
     async def on_go(update, context):
         if not _guarded(update, wl):
