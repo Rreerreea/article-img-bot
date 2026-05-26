@@ -190,8 +190,8 @@ def test_explicit_story_overrides_many_bullets():
     assert slots[0].type is SlotType.STORY
 
 
-def test_inline_image_marker_associates_with_next_marker(tmp_path):
-    """[INLINE_IMAGE:...] перед Рис. должно попасть в slot.inline_refs."""
+def test_inline_image_NOT_attached_without_trigger(tmp_path):
+    """Картинка перед Рис. без ключевых слов — НЕ привязывается (opt-in)."""
     img_path = tmp_path / "ref.png"
     img_path.write_bytes(b"fake-png")
     text = (
@@ -201,23 +201,56 @@ def test_inline_image_marker_associates_with_next_marker(tmp_path):
     )
     slots = parse(text)
     assert len(slots) == 1
+    assert slots[0].inline_refs == ()  # БЕЗ триггера — не берём
+
+
+def test_inline_image_attached_when_trigger_in_title(tmp_path):
+    """Ключевая фраза «из картинки выше» в title — берём предыдущую картинку."""
+    img_path = tmp_path / "ref.png"
+    img_path.write_bytes(b"fake-png")
+    text = (
+        f"[INLINE_IMAGE:{img_path}]\n\n"
+        "Рис. Используй контент из картинки выше\n"
+    )
+    slots = parse(text)
     assert slots[0].inline_refs == (str(img_path),)
 
 
+def test_inline_image_attached_with_explicit_ref_category(tmp_path):
+    """`Рис.[ref]` форсит привязку даже без ключевых слов в title."""
+    img = tmp_path / "x.png"
+    img.write_bytes(b"x")
+    text = f"[INLINE_IMAGE:{img}]\nРис.[ref] Просто заголовок\n"
+    slots = parse(text)
+    assert slots[0].inline_refs == (str(img),)
+    # `[ref]` не сохраняется как папка-категория.
+    assert slots[0].category is None
+
+
+def test_inline_image_skipped_with_noref(tmp_path):
+    """`Рис.[noref]` явно отказывается от inline даже при «выше» в title."""
+    img = tmp_path / "x.png"
+    img.write_bytes(b"x")
+    text = (
+        f"[INLINE_IMAGE:{img}]\n"
+        "Рис.[noref] Используй картинку выше\n"  # триггер есть, но noref сильнее
+    )
+    slots = parse(text)
+    assert slots[0].inline_refs == ()
+    assert slots[0].category is None
+
+
 def test_inline_image_resets_after_marker(tmp_path):
-    """Inline image идёт только в ближайший следующий Рис., не в дальнейшие."""
+    """Каждая inline-картинка ассоциируется максимум с одним маркером."""
     img1 = tmp_path / "a.png"; img1.write_bytes(b"a")
     img2 = tmp_path / "b.png"; img2.write_bytes(b"b")
     text = (
         f"[INLINE_IMAGE:{img1}]\n"
-        "Рис. Первый\n"
-        "• X\n\n"
+        "Рис. Используй картинку выше\n\n"
         f"[INLINE_IMAGE:{img2}]\n"
-        "Рис. Второй\n"
-        "• Y\n"
+        "Рис. Используй картинку выше\n"
     )
     slots = parse(text)
-    assert len(slots) == 2
     assert slots[0].inline_refs == (str(img1),)
     assert slots[1].inline_refs == (str(img2),)
 

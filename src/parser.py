@@ -62,12 +62,39 @@ def _slug(title: str, idx: int, used: set[str]) -> str:
     return slug
 
 
+def _wants_inline_ref(title: str, category: str | None) -> bool | None:
+    """Привязывать ли картинки-выше как inline-рефы для этого слота.
+
+    True — да (либо ключ во фразе title, либо явная категория [ref]/[references]).
+    False — явный noref, игнорировать накопленные картинки.
+    None — нейтрально (по умолчанию НЕ привязываем; защита от случайных
+    декоративных картинок становящихся рефами).
+    """
+    if category in ("noref", "no-ref", "без_рефов", "без-рефов"):
+        return False
+    if category in ("ref", "references", "withref", "with-ref"):
+        return True
+    title_low = title.lower()
+    triggers = (
+        "из картинки выше", "с картинки выше", "картинку выше",
+        "картинки выше", "картинка выше", "по картинке выше",
+        "по картинке", "по схеме выше", "по схеме",
+        "референс выше", "за референс", "взять за референс",
+        "контент с картинки", "контент из картинки",
+        "используй картинку", "use image above", "based on image above",
+    )
+    if any(t in title_low for t in triggers):
+        return True
+    return None
+
+
 def parse(text: str) -> list[ImageSlot]:
     lines = text.splitlines()
     slots: list[ImageSlot] = []
     used: set[str] = set()
-    # Накопленные [INLINE_IMAGE:...] между предыдущим маркером и текущим —
-    # станут inline_refs следующего слота.
+    # Накопленные [INLINE_IMAGE:...] между предыдущим маркером и текущим.
+    # Привязываем к слоту ТОЛЬКО если автор явно об этом просит —
+    # ключевыми словами в title или категорией [ref].
     pending_inline: list[str] = []
 
     i = 0
@@ -136,17 +163,34 @@ def parse(text: str) -> list[ImageSlot]:
             slot_type = SlotType.INFOGRAPHIC
         elif resolved == "story":
             slot_type = SlotType.STORY
+        # Привязываем ли inline-рефы? По умолчанию — НЕТ. Только если
+        # автор явно просит ключевой фразой или категорией [ref].
+        want_inline = _wants_inline_ref(title, category)
+        if want_inline:
+            slot_inline = tuple(pending_inline)
+        else:
+            slot_inline = ()
+        # `[noref]` / `[ref]` — это категории-флаги, не настоящие папки
+        # рефов. Не передаём их в slot.category, иначе сломаем
+        # `refs_dir_for`. Сбрасываем в None.
+        if category in ("ref", "references", "withref", "with-ref",
+                        "noref", "no-ref", "без_рефов", "без-рефов"):
+            stored_category: str | None = None
+        else:
+            stored_category = category
+
         slots.append(
             ImageSlot(
                 id=sid,
                 title=title,
                 bullets=tuple(bullets),
                 type=slot_type,
-                category=category,
-                inline_refs=tuple(pending_inline),
+                category=stored_category,
+                inline_refs=slot_inline,
             )
         )
-        # Очередь inline-картинок сбрасывается после ассоциации со слотом.
+        # Очередь inline-картинок очищаем в любом случае — каждая
+        # картинка ассоциируется максимум с одним маркером.
         pending_inline = []
         i = max(j, i + 1)
 
