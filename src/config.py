@@ -57,6 +57,9 @@ class Config:
     # Krea-модель — путь типа "bfl/flux-1.1-pro", "google/nano-banana-pro",
     # "ideogram/ideogram-3". Подставляется в /generate/image/{krea_model}.
     krea_model: str = "bfl/flux-1.1-pro"
+    # Telegram user_id владельца. Туда летят критические алерты:
+    # billing-hard-limit OpenAI/Krea, авто-уведомления.
+    admin_user_id: int = 0
     # Гибрид 10.A: правильный текст ТЗ поверх инфографики. Можно
     # отключить (HF_TEXT_OVERLAY=0), чтобы сравнить с чистым визуалом.
     text_overlay: bool = True
@@ -97,6 +100,7 @@ class Config:
             openai_quality=os.getenv("OPENAI_QUALITY", "medium"),
             krea_api_key=os.getenv("KREA_API_KEY", ""),
             krea_model=os.getenv("KREA_MODEL", "bfl/flux-1.1-pro"),
+            admin_user_id=int(os.getenv("ADMIN_USER_ID", "0") or "0"),
             text_overlay=os.getenv("HF_TEXT_OVERLAY", "1") not in ("0", "false", "False"),
         )
         # REAL без нужных ключей — дорогая/глупая ошибка. Падаем явно.

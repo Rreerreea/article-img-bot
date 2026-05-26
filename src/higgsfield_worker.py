@@ -440,12 +440,14 @@ class HiggsfieldWorker:
     async def _generate_krea(self, spec: PromptSpec) -> bytes:
         """Krea API: async job + polling + скачивание result.urls[0].
 
-        Модель определяется `cfg.krea_model` (формат «vendor/model», напр.
-        «bfl/flux-1.1-pro»). Рефы пока НЕ передаются (Krea принимает их
-        как публичные URL — нужен upload-хост, отдельный таск).
+        Модель определяется `cfg.krea_model` (формат «vendor/model»).
+        Рефы передаются как публичные URL (см. krea_uploads): inline →
+        `imageUrls` (композиция), folder refs → `styleImages` (стиль).
+        Flux Pro рефы не принимает — игнорируем для него.
         """
         import asyncio
         import httpx
+        from . import krea_uploads
 
         if not self.cfg.krea_api_key:
             raise RuntimeError("KREA_API_KEY пуст — настрой в .env")
@@ -457,11 +459,59 @@ class HiggsfieldWorker:
         else:
             width, height = 1024, 1024
 
-        body = {
+        body: dict = {
             "prompt": spec.prompt[:4000],  # лимит безопасности
             "width": width,
             "height": height,
         }
+
+        # Подмешиваем рефы — но только для моделей которые их принимают.
+        model = self.cfg.krea_model
+        supports_image_inputs = (
+            model.startswith("google/")     # Nano Banana Pro/2 — да
+            or model.startswith("ideogram/")  # Ideogram — да
+            # Flux (bfl/) — нет
+        )
+        if supports_image_inputs:
+            # Загружаем inline-рефы (композиция) — это imageUrls у Nano Banana,
+            # styleImages у Ideogram (он не имеет отдельного «компози»-поля).
+            inline_urls: list[str] = []
+            if spec.inline_refs:
+                from pathlib import Path
+                inline_urls = await krea_uploads.upload_many(
+                    [Path(p) for p in spec.inline_refs][:2]
+                )
+            # Загружаем folder-рефы (стиль).
+            from pathlib import Path
+            folder = Path(spec.refs_dir)
+            style_paths: list[Path] = []
+            if folder.is_dir():
+                exts = {".png", ".jpg", ".jpeg", ".webp"}
+                style_paths = [
+                    f for f in sorted(folder.iterdir())
+                    if f.is_file() and f.suffix.lower() in exts
+                ][:3]
+            style_urls = await krea_uploads.upload_many(style_paths)
+
+            # Раскладываем по полям модели.
+            if model.startswith("google/"):
+                # Nano Banana Pro: imageUrls = композиция, styleImages = стиль
+                if inline_urls:
+                    body["imageUrls"] = inline_urls
+                if style_urls:
+                    body["styleImages"] = [
+                        {"url": u, "strength": 1.0} for u in style_urls
+                    ]
+            elif model.startswith("ideogram/"):
+                # Ideogram: только styleImages (нет imageUrls); composition
+                # передаём через style тоже, но с большей силой.
+                all_imgs = (
+                    [{"url": u, "strength": 1.5} for u in inline_urls]
+                    + [{"url": u, "strength": 1.0} for u in style_urls]
+                )
+                if all_imgs:
+                    body["styleImages"] = all_imgs[:4]
+
         url_post = f"https://api.krea.ai/generate/image/{self.cfg.krea_model}"
         headers = {
             "Authorization": f"Bearer {self.cfg.krea_api_key}",

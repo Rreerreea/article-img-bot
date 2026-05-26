@@ -453,6 +453,39 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 if r.error:
                     log.warning("slot %s failed: %s", r.slot_id, r.error)
 
+            # Если упало по billing — пинаем админа (Гоше) в личку.
+            # Юзер видит дружелюбную, владелец видит «надо пополнить».
+            billing_err = next(
+                (r.error for r in result.results if r.error and any(
+                    m in r.error.lower() for m in (
+                        "billing_hard_limit", "insufficient_quota",
+                        "billing hard limit",
+                    )
+                )), None,
+            )
+            if billing_err and cfg.admin_user_id:
+                provider = (
+                    "OpenAI" if choice.provider.value == "openai"
+                    else "Krea" if choice.provider.value == "krea"
+                    else choice.provider.value
+                )
+                refill_url = (
+                    "https://platform.openai.com/billing"
+                    if provider == "OpenAI" else
+                    "https://www.krea.ai/pricing"
+                    if provider == "Krea" else ""
+                )
+                try:
+                    await context.bot.send_message(
+                        chat_id=cfg.admin_user_id,
+                        text=(
+                            f"⚠️ {provider}: лимит исчерпан, пополни счёт.\n"
+                            f"{refill_url}"
+                        ),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("admin alert failed: %s", exc)
+
             if result.zip_path is None:
                 context.user_data["gen_done"] = True
                 return await status.edit_text(
@@ -760,6 +793,9 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             "картинки выше", "таблицу ниже", "таблицу выше",
             "референс картинку", "контент с картинки",
         )
+        slots_with_inline = sum(
+            1 for s in slots if getattr(s, "inline_refs", ())
+        )
         for idx, s in enumerate(slots, 1):
             title_low = s.title.lower()
             has_inline = bool(getattr(s, "inline_refs", ()))
@@ -775,6 +811,15 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                 warnings_lines.append(
                     f"📎 #{idx} — есть {len(s.inline_refs)} inline-реф(а) "
                     "из .docx, использую как референс"
+                )
+        # Спец-варнинг для Flux Pro: text-only, рефы не работают.
+        from .config import Provider
+        if choice.provider is Provider.KREA and slots_with_inline > 0:
+            if choice.model.startswith("bfl/"):
+                warnings_lines.append(
+                    f"⚠️ Flux Pro работает только по тексту — "
+                    f"{slots_with_inline} inline-реф(а) проигнорятся. "
+                    "Выбери Nano Banana Pro или Ideogram если нужны рефы."
                 )
         warn_block = ("\n\n" + "\n".join(warnings_lines)) if warnings_lines else ""
 

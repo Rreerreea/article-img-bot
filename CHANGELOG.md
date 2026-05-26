@@ -8,6 +8,29 @@
 
 ---
 
+## 0.6 — 2026-05-26
+
+**Krea теперь поддерживает рефы (через 0x0.st upload).**
+
+Раньше Nano Banana Pro / Ideogram через Krea генерили только по тексту,
+inline-картинки из .docx и refs/ папка игнорились (Krea API требует
+публичных URL, у нас локальные файлы).
+
+Решение: `src/krea_uploads.py` — загружает рефы на 0x0.st (без auth,
+365-дневная жизнь URL), кэширует по SHA1. `_generate_krea` маппит:
+- inline → `imageUrls` (Nano Banana Pro) или `styleImages` strength=1.5 (Ideogram)
+- folder refs/ → `styleImages` strength=1.0
+
+Flux Pro остаётся text-only (API не принимает рефы).
+
+**Реактивный billing-alert.** При ошибке `billing_hard_limit_reached` /
+`insufficient_quota` от OpenAI или Krea → `context.bot.send_message`
+админу (Гошин user_id из `ADMIN_USER_ID=929643115` в .env) с
+ссылкой на пополнение. Юзер видит «не вышло», админ — точную причину.
+
+**Warning в смете для Krea+Flux:** если выбрана Flux Pro и есть слоты
+с inline_refs — предупреждение «Flux text-only, рефы проигнорятся».
+
 ## 0.5 — 2026-05-26
 
 `HF_CONCURRENCY=2 → 4` в .env на проде. Генерация в 2 раза быстрее.
