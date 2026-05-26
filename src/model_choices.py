@@ -44,7 +44,7 @@ CHOICES: dict[str, ModelChoice] = {
         price_per_image=0.167,
         time_per_image_sec=80,
     ),
-    # 2) Nano Banana Pro через Krea — премиум универсал.
+    # 2) Nano Banana Pro через Krea — премиум универсал с поддержкой рефов.
     "nano_pro": ModelChoice(
         key="nano_pro",
         label="Nano Banana Pro ~$0.15",
@@ -55,18 +55,8 @@ CHOICES: dict[str, ModelChoice] = {
         time_per_image_sec=30,
         needs_krea=True,
     ),
-    # 3) Flux 1.1 Pro через Krea — лучший фото-реализм.
-    "flux_pro": ModelChoice(
-        key="flux_pro",
-        label="Flux Pro ~$0.06",
-        provider=Provider.KREA,
-        model="bfl/flux-1.1-pro",
-        quality="",
-        price_per_image=0.06,
-        time_per_image_sec=15,
-        needs_krea=True,
-    ),
-    # 4) Ideogram 3.0 через Krea — лучший рендер текста на картинках.
+    # 3) Ideogram 3.0 через Krea — лучший рендер текста на картинках,
+    #    также поддерживает style/character reference images.
     "ideogram_3": ModelChoice(
         key="ideogram_3",
         label="Ideogram 3.0 ~$0.06",
@@ -77,6 +67,10 @@ CHOICES: dict[str, ModelChoice] = {
         time_per_image_sec=20,
         needs_krea=True,
     ),
+    # Flux 1.1 Pro был вырезан 2026-05-26 — API text-only, рефы не
+    # принимает (нет полей imageUrls/styleImages). Друг пользуется
+    # рефами всегда → бесполезен. Если найдём вариант Flux с поддержкой
+    # рефов (Flux Redux / Kontext на Krea) — вернём отдельным выбором.
 }
 
 DEFAULT = "gpt_high"
