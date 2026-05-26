@@ -8,6 +8,27 @@
 
 ---
 
+## 0.4 — 2026-05-26
+
+**Разделение ролей рефов: inline = композиция, folder = стиль.**
+
+Друг: «у меня есть точная по композиции картинка, которую нужно
+завернуть в мой стиль. Если есть картинка-пример — прям повторяй».
+
+До 0.4 промпт говорил «не копируй композицию из рефов» — это
+блокировало точное повторение. Теперь:
+- Если есть inline-реф из .docx → `COMPOSITION_HINT_FOR_INLINE`:
+  «первая картинка = blueprint, copy composition/layout/perspective
+  precisely»
+- Если есть И folder-рефы → дополнительно `STYLE_HINT_WHEN_INLINE_AND_FOLDER`:
+  «style components from OTHER refs, composition only from first»
+- Если только folder → старый `STYLE_HINT_FOR_REFS` (не копировать subject)
+
+Также: в режиме «✏️ Внести правки» теперь можно прислать фото с
+подписью — `on_ref_photo` детектит `awaiting_edit`, скачивает фото
+в `/tmp/edit-refs/`, передаёт как `extra_ref_path` в `_do_edit`.
+Caption становится инструкцией (или дефолт).
+
 ## 0.3 — 2026-05-26
 
 Inline-рефы из .docx переключены с opt-OUT на **opt-IN**.

@@ -134,24 +134,55 @@ STYLE_HINT_FOR_REFS = (
     "absent from the references."
 )
 
+# Когда есть inline-картинка из самой статьи (вставлена автором в .docx
+# перед маркером Рис.) — это КОМПОЗИЦИОННЫЙ ШАБЛОН, не стиль.
+# Друг ясно: «у меня есть точная по композиции картинка, которую нужно
+# завернуть в мой стиль». Inline = ЧТО и ГДЕ, refs/ = КАК (стиль).
+COMPOSITION_HINT_FOR_INLINE = (
+    "COMPOSITION TEMPLATE: the FIRST reference image is the exact "
+    "structural blueprint. Copy its composition, element placement, "
+    "spatial arrangement, perspective, proportions, and overall layout "
+    "PRECISELY. Treat it as a wireframe for WHAT goes WHERE — same "
+    "number of objects in the same positions and relations. Do not "
+    "invent new elements or rearrange them."
+)
+
+STYLE_HINT_WHEN_INLINE_AND_FOLDER = (
+    "VISUAL STYLE: apply these style components from the OTHER (not "
+    "the first) reference images — color palette, materials, textures, "
+    "lighting, mood, medium. Style refs do NOT dictate composition; "
+    "composition comes only from the first image above."
+)
+
 
 def build_prompt(
     slot: ImageSlot,
     preset: str | None = None,
     *,
     has_refs: bool = False,
+    has_inline_refs: bool = False,
+    has_folder_refs: bool = False,
     style_desc: str = "",
 ) -> str:
-    """Промпт-каркас. Стиль вытаскиваем из рефов и/или user_notes — без
-    жёстких хардкодов «premium 3D / magazine / cryptocurrency motifs»,
-    иначе рефы не могут перебить.
+    """Промпт-каркас. Промпт реагирует на ДВА разных типа рефов:
+    - inline (картинка прямо из .docx статьи) = композиционный шаблон,
+      бот точно повторяет layout/positions/perspective
+    - folder (refs/<категория>/) = стиль (палитра/материалы/освещение)
 
-    has_refs: если True — STYLE_HINT_FOR_REFS (строго копировать визуал).
-    style_desc: пользовательский .style.txt — идёт как «User style notes».
-    preset: оставлен для совместимости со скрытым /style; если задан
-        нетипично — добавляется как доп. подсказка, иначе нейтрально.
+    has_inline_refs / has_folder_refs: точные флаги наличия каждого типа.
+    has_refs: legacy общий флаг (оставлен для обратной совместимости).
     """
-    style_hint = STYLE_HINT_FOR_REFS + "\n" if has_refs else ""
+    if has_inline_refs and has_folder_refs:
+        style_hint = (
+            COMPOSITION_HINT_FOR_INLINE + "\n"
+            + STYLE_HINT_WHEN_INLINE_AND_FOLDER + "\n"
+        )
+    elif has_inline_refs:
+        style_hint = COMPOSITION_HINT_FOR_INLINE + "\n"
+    elif has_folder_refs or has_refs:
+        style_hint = STYLE_HINT_FOR_REFS + "\n"
+    else:
+        style_hint = ""
     user_notes = f"User style notes: {style_desc}\n" if style_desc else ""
     # Преcет применяется ТОЛЬКО если выбран явно через /style. По дефолту
     # (DEFAULT preset) ничего не подмешиваем — пусть рефы рулят.
@@ -217,15 +248,18 @@ def build(
             # генерацию. Свежий .style.txt от бота всегда utf-8.
             style_desc = ""
     # Inline-рефы (из самого docx) и/или картинки в папке refs/<cat>/.
+    # Различаем их — это РАЗНЫЕ РОЛИ в промпте: inline = композиция,
+    # folder = стиль.
     img_exts = {".png", ".jpg", ".jpeg", ".webp"}
     inline_refs = tuple(
         Path(p) for p in getattr(slot, "inline_refs", ()) if Path(p).is_file()
     )
+    has_inline_refs = bool(inline_refs)
     has_folder_refs = folder.is_dir() and any(
         f.is_file() and f.suffix.lower() in img_exts
         for f in folder.iterdir()
     )
-    has_refs = bool(inline_refs) or has_folder_refs
+    has_refs = has_inline_refs or has_folder_refs
     sig = refs_signature(folder)
     # Версия .style.txt + inline-картинки → сигнатура для кэша.
     extras = []
@@ -240,7 +274,11 @@ def build(
         ).hexdigest()[:16]
     return PromptSpec(
         prompt=build_prompt(
-            slot, preset, has_refs=has_refs, style_desc=style_desc
+            slot, preset,
+            has_refs=has_refs,
+            has_inline_refs=has_inline_refs,
+            has_folder_refs=has_folder_refs,
+            style_desc=style_desc,
         ),
         aspect_ratio=ASPECT_RATIO[slot.type],
         target_size=TARGET_SIZE[slot.type],

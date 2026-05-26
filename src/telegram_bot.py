@@ -556,16 +556,28 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
 
     # ---- правка (общая для кнопки и /edit) -------------------------------
 
-    async def _do_edit(update, context, message, slot_id: str, instruction: str):
+    async def _do_edit(
+        update, context, message, slot_id: str, instruction: str,
+        extra_ref_path: Path | None = None,
+    ):
         choice = _choice(update)
         preset = _preset(update)
         slots = context.user_data.get("slots") or []
         slot = next((s for s in slots if s.id == slot_id), None)
+        # Если юзер приложил фото с подписью — оно становится дополнительным
+        # inline-рефом ИМЕННО для этой правки. dataclass.replace, чтобы не
+        # засорять оригинальный slot.
+        if slot and extra_ref_path:
+            import dataclasses
+            new_inline = slot.inline_refs + (str(extra_ref_path),)
+            slot = dataclasses.replace(slot, inline_refs=new_inline)
         mode_hint = (
             "правлю композицию"
             if choice.supports_edit else
             "перегенерирую с твоей правкой"
         )
+        if extra_ref_path:
+            mode_hint += " (с твоим референсом)"
         sec = choice.time_per_image_sec
         eta = f"~{sec} сек" if sec < 90 else f"~{round(sec / 60)} мин"
         status = await message.reply_text(
@@ -862,16 +874,46 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
     async def on_ref_photo(update, context):
         if not _guarded(update, wl):
             return await _deny(update)
+        msg = update.message
+
+        # ПРИОРИТЕТ 1: юзер в режиме правки слота И прислал фото →
+        # это inline-реф ДЛЯ этой правки, не загрузка реф-категории.
+        # Подпись фото = инструкция (если есть). Иначе дефолт.
+        awaiting_slot = context.user_data.get("awaiting_edit")
+        if awaiting_slot:
+            _clear_awaiting(context)
+            photo = msg.photo[-1]
+            tg_file = await photo.get_file()
+            import datetime as _dt
+            ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            tmp_dir = Path("/tmp/article-img-bot-edit-refs")
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            ref_path = tmp_dir / f"editref_{ts}.jpg"
+            await tg_file.download_to_drive(ref_path)
+            caption = (msg.caption or "").strip()
+            instruction = caption or (
+                "Use the attached reference image as the visual guide "
+                "and apply its composition / layout / style to this slot."
+            )
+            return await _do_edit(
+                update, context, msg, awaiting_slot, instruction,
+                extra_ref_path=ref_path,
+            )
+
+        # ПРИОРИТЕТ 2: фото от юзера который заранее ввёл pending_ref
+        # категорию через старый /refs flow.
         pending = state.get(update.effective_chat.id, "pending_ref")
         if pending and _category_exists(pending):
-            photo = update.message.photo[-1]
+            photo = msg.photo[-1]
             return await _save_ref(
-                update.message, pending, await photo.get_file()
+                msg, pending, await photo.get_file()
             )
-        await update.message.reply_text(
+
+        # ПРИОРИТЕТ 3: обычная загрузка реф-категории.
+        await msg.reply_text(
             "Куда добавить этот референс?",
             reply_markup=_categories_kb(),
-            reply_to_message_id=update.message.message_id,
+            reply_to_message_id=msg.message_id,
         )
 
     async def on_edit(update, context):
