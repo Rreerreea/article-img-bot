@@ -58,13 +58,15 @@ class PipelineService:
             "provider": choice.provider,
             "price_per_image": choice.price_per_image,
         }
-        # Поля модели — у Gemini и OpenAI разные, оверрайдим только нужное.
+        # Поля модели зависят от провайдера, оверрайдим только нужное.
         from .config import Provider
         if choice.provider is Provider.OPENAI:
             overrides["openai_model"] = choice.model
             overrides["openai_quality"] = choice.quality or "medium"
         elif choice.provider is Provider.GEMINI:
             overrides["gemini_model"] = choice.model
+        elif choice.provider is Provider.KREA:
+            overrides["krea_model"] = choice.model
         return HiggsfieldWorker(dataclasses.replace(self.cfg, **overrides))
 
     def prepare(

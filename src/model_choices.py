@@ -1,8 +1,13 @@
 """Каталог моделей-генераторов для выбора пользователем в боте.
 
-Каждый вариант = провайдер + модель + (для OpenAI) качество + цена.
-В UI показывается человеческим лейблом; внутри пайплайна оверрайдит cfg.
-Гемини-варианты доступны только если есть GEMINI_API_KEY.
+Сейчас 4 варианта в меню (порядок зафиксирован Гошей 2026-05-26):
+1. GPT-Image — OpenAI direct, с рефами через images.edit
+2. Nano Banana Pro — Google Gemini ЧЕРЕЗ Krea-аггрегатор
+3. Flux 1.1 Pro — фото-реализм через Krea
+4. Ideogram 3.0 — лучший рендер текста через Krea
+
+Старые Gemini-варианты (через прямой Google ключ) скрыты — все Gemini-
+дороги ведут через Krea, чтобы один ключ покрывал всё.
 """
 
 from __future__ import annotations
@@ -19,58 +24,62 @@ class ModelChoice:
     key: str           # стабильный id для callback_data и кэша
     label: str         # текст для кнопки
     provider: Provider
-    model: str
-    quality: str       # для OpenAI; для Gemini игнорируется
+    model: str         # имя модели у провайдера (для Krea — путь vendor/model)
+    quality: str       # для OpenAI; иначе игнорируется
     price_per_image: float
-    time_per_image_sec: int = 30  # примерное время на одну картинку
-    needs_gemini: bool = False  # скрывать, если нет GEMINI_API_KEY
-    supports_edit: bool = False  # умеет ли модель править готовую картинку
+    time_per_image_sec: int = 30
+    needs_krea: bool = False    # скрыть если нет KREA_API_KEY
+    needs_gemini: bool = False  # скрыть если нет GEMINI_API_KEY (direct)
+    supports_edit: bool = False
 
 
 CHOICES: dict[str, ModelChoice] = {
-    "gpt_med": ModelChoice(
-        key="gpt_med",
-        label="GPT-2 medium ~$0.05",
-        provider=Provider.OPENAI,
-        model="gpt-image-2",
-        quality="medium",
-        price_per_image=0.053,
-        time_per_image_sec=40,
-    ),
+    # 1) OpenAI напрямую — с рефами через images.edit. Силён в тексте.
     "gpt_high": ModelChoice(
         key="gpt_high",
-        label="GPT-2 high ~$0.17",
+        label="GPT-Image high ~$0.17",
         provider=Provider.OPENAI,
         model="gpt-image-2",
         quality="high",
         price_per_image=0.167,
         time_per_image_sec=80,
     ),
-    "nano_flash": ModelChoice(
-        key="nano_flash",
-        label="Nano Banana 2 ~$0.04",
-        provider=Provider.GEMINI,
-        model="gemini-3.1-flash-image-preview",
-        quality="",
-        price_per_image=0.04,
-        time_per_image_sec=15,
-        needs_gemini=True,
-        supports_edit=True,
-    ),
+    # 2) Nano Banana Pro через Krea — премиум универсал.
     "nano_pro": ModelChoice(
         key="nano_pro",
-        label="Nano Banana Pro ~$0.13",
-        provider=Provider.GEMINI,
-        model="gemini-3-pro-image-preview",
+        label="Nano Banana Pro ~$0.15",
+        provider=Provider.KREA,
+        model="google/nano-banana-pro",
         quality="",
-        price_per_image=0.134,
-        time_per_image_sec=60,
-        needs_gemini=True,
-        supports_edit=True,
+        price_per_image=0.15,
+        time_per_image_sec=30,
+        needs_krea=True,
+    ),
+    # 3) Flux 1.1 Pro через Krea — лучший фото-реализм.
+    "flux_pro": ModelChoice(
+        key="flux_pro",
+        label="Flux Pro ~$0.06",
+        provider=Provider.KREA,
+        model="bfl/flux-1.1-pro",
+        quality="",
+        price_per_image=0.06,
+        time_per_image_sec=15,
+        needs_krea=True,
+    ),
+    # 4) Ideogram 3.0 через Krea — лучший рендер текста на картинках.
+    "ideogram_3": ModelChoice(
+        key="ideogram_3",
+        label="Ideogram 3.0 ~$0.06",
+        provider=Provider.KREA,
+        model="ideogram/ideogram-3",
+        quality="",
+        price_per_image=0.06,
+        time_per_image_sec=20,
+        needs_krea=True,
     ),
 }
 
-DEFAULT = "gpt_med"
+DEFAULT = "gpt_high"
 
 
 def canon(name: str | None) -> str:
@@ -84,6 +93,15 @@ def get(name: str | None) -> ModelChoice:
     return CHOICES[canon(name)]
 
 
-def available(has_gemini_key: bool) -> list[ModelChoice]:
-    """Список того, что реально можно использовать на этом .env."""
-    return [c for c in CHOICES.values() if has_gemini_key or not c.needs_gemini]
+def available(
+    has_gemini_key: bool = False, has_krea_key: bool = False
+) -> list[ModelChoice]:
+    """Что реально доступно на текущем .env. Krea-варианты требуют KREA_API_KEY."""
+    out = []
+    for c in CHOICES.values():
+        if c.needs_krea and not has_krea_key:
+            continue
+        if c.needs_gemini and not has_gemini_key:
+            continue
+        out.append(c)
+    return out

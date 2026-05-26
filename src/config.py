@@ -30,8 +30,9 @@ class Mode(str, Enum):
 
 
 class Provider(str, Enum):
-    GEMINI = "gemini"          # Nano Banana (Gemini Image)
+    GEMINI = "gemini"          # Nano Banana (Gemini Image, прямой Google ключ)
     OPENAI = "openai"          # GPT Image 2 — силён в тексте
+    KREA = "krea"              # Аггрегатор: Flux Pro, Nano Banana Pro, Ideogram
     HIGGSFIELD = "higgsfield"  # запасной
 
 
@@ -52,6 +53,10 @@ class Config:
     openai_api_key: str = ""
     openai_model: str = "gpt-image-2"
     openai_quality: str = "medium"  # low|medium|high — баланс цена/качество
+    krea_api_key: str = ""
+    # Krea-модель — путь типа "bfl/flux-1.1-pro", "google/nano-banana-pro",
+    # "ideogram/ideogram-3". Подставляется в /generate/image/{krea_model}.
+    krea_model: str = "bfl/flux-1.1-pro"
     # Гибрид 10.A: правильный текст ТЗ поверх инфографики. Можно
     # отключить (HF_TEXT_OVERLAY=0), чтобы сравнить с чистым визуалом.
     text_overlay: bool = True
@@ -90,6 +95,8 @@ class Config:
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
             openai_model=os.getenv("OPENAI_MODEL", "gpt-image-2"),
             openai_quality=os.getenv("OPENAI_QUALITY", "medium"),
+            krea_api_key=os.getenv("KREA_API_KEY", ""),
+            krea_model=os.getenv("KREA_MODEL", "bfl/flux-1.1-pro"),
             text_overlay=os.getenv("HF_TEXT_OVERLAY", "1") not in ("0", "false", "False"),
         )
         # REAL без нужных ключей — дорогая/глупая ошибка. Падаем явно.
@@ -109,5 +116,10 @@ class Config:
                 raise RuntimeError(
                     "HF_MODE=REAL, провайдер openai, но OPENAI_API_KEY пуст. "
                     "Заполните ключ или вернитесь в HF_MODE=MOCK."
+                )
+            if cfg.provider is Provider.KREA and not cfg.krea_api_key:
+                raise RuntimeError(
+                    "HF_MODE=REAL, провайдер krea, но KREA_API_KEY пуст. "
+                    "Заполните ключ в .env или выберите другую модель."
                 )
         return cfg

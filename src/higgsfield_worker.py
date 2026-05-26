@@ -176,6 +176,8 @@ class HiggsfieldWorker:
             return await self._generate_gemini(spec)
         if self.cfg.provider is Provider.OPENAI:
             return await self._generate_openai(spec)
+        if self.cfg.provider is Provider.KREA:
+            return await self._generate_krea(spec)
         return await self._generate_higgsfield(spec)
 
     def _render_mock(self, slot: ImageSlot) -> bytes:
@@ -396,6 +398,79 @@ class HiggsfieldWorker:
                 if len(out) >= limit:
                     break
         return out
+
+    # ---- Krea API (Flux Pro, Nano Banana Pro, Ideogram 3.0) --------------
+
+    async def _generate_krea(self, spec: PromptSpec) -> bytes:
+        """Krea API: async job + polling + скачивание result.urls[0].
+
+        Модель определяется `cfg.krea_model` (формат «vendor/model», напр.
+        «bfl/flux-1.1-pro»). Рефы пока НЕ передаются (Krea принимает их
+        как публичные URL — нужен upload-хост, отдельный таск).
+        """
+        import asyncio
+        import httpx
+
+        if not self.cfg.krea_api_key:
+            raise RuntimeError("KREA_API_KEY пуст — настрой в .env")
+
+        # 16:9 ширина 1440 — максимум у Flux. Высота 810 даёт 16:9.
+        # Nano Banana Pro и Ideogram тоже примут.
+        if spec.aspect_ratio == "16:9":
+            width, height = 1440, 810
+        else:
+            width, height = 1024, 1024
+
+        body = {
+            "prompt": spec.prompt[:4000],  # лимит безопасности
+            "width": width,
+            "height": height,
+        }
+        url_post = f"https://api.krea.ai/generate/image/{self.cfg.krea_model}"
+        headers = {
+            "Authorization": f"Bearer {self.cfg.krea_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=120) as http:
+            resp = await http.post(url_post, headers=headers, json=body)
+            if resp.status_code >= 400:
+                raise RuntimeError(
+                    f"Krea POST {resp.status_code}: {resp.text[:300]}"
+                )
+            job = resp.json()
+            job_id = job.get("job_id")
+            if not job_id:
+                raise RuntimeError(
+                    f"Krea не вернул job_id: {resp.text[:300]}"
+                )
+
+            # Polling: каждые 2 сек, до 90 сек суммарно.
+            poll_url = f"https://api.krea.ai/jobs/{job_id}"
+            for _ in range(45):
+                await asyncio.sleep(2)
+                pr = await http.get(poll_url, headers=headers)
+                if pr.status_code >= 400:
+                    raise RuntimeError(
+                        f"Krea poll {pr.status_code}: {pr.text[:300]}"
+                    )
+                data = pr.json()
+                status = data.get("status")
+                if status == "completed":
+                    urls = (data.get("result") or {}).get("urls") or []
+                    if not urls:
+                        raise RuntimeError(
+                            "Krea completed без result.urls"
+                        )
+                    img_resp = await http.get(urls[0])
+                    img_resp.raise_for_status()
+                    return img_resp.content
+                if status == "failed":
+                    err = data.get("error") or data.get("message") or "?"
+                    raise RuntimeError(f"Krea job failed: {err}")
+                # else: queued, scheduled, processing — продолжаем
+
+            raise RuntimeError("Krea job timeout — > 90 сек без completed")
 
     @staticmethod
     def _extract_openai_bytes(resp) -> bytes:

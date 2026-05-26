@@ -101,9 +101,13 @@ def _estimate_kb(
     )
 
 
-def _model_kb(current: str, has_gemini: bool) -> InlineKeyboardMarkup:
+def _model_kb(
+    current: str, has_gemini: bool, has_krea: bool
+) -> InlineKeyboardMarkup:
     rows = []
-    for c in model_choices.available(has_gemini):
+    for c in model_choices.available(
+        has_gemini_key=has_gemini, has_krea_key=has_krea
+    ):
         mark = "✓ " if c.key == current else ""
         rows.append(
             [InlineKeyboardButton(mark + c.label, callback_data=f"model:{c.key}")]
@@ -212,6 +216,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         return model_choices.get(_choice_key(update))
 
     has_gemini = bool(cfg.gemini_api_key)
+    has_krea = bool(cfg.krea_api_key)
 
     def _refs_dir(kind: str) -> Path:
         d = cfg.refs_dir / kind
@@ -880,7 +885,9 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         if data == "model:menu":
             return await q.edit_message_text(
                 "Выбери модель:",
-                reply_markup=_model_kb(_choice_key(update), has_gemini),
+                reply_markup=_model_kb(
+                    _choice_key(update), has_gemini, has_krea
+                ),
             )
         if data.startswith("model:"):
             key = model_choices.canon(data.split(":", 1)[1])
