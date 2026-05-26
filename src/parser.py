@@ -24,6 +24,14 @@ MARKER = re.compile(
 # Обычные абзацы так не начинаются — границу блока не размывает.
 BULLET_LINE = re.compile(r"^(?:[•\-\*·–—]|\d+[.\)])\s+(.*)$")
 
+# Маркер встроенной картинки из .docx (поставлен в article_loader).
+INLINE_IMAGE_LINE = re.compile(r"^\s*\[INLINE_IMAGE:(.+?)\]\s*$")
+
+# Markdown-таблица: строка вида `| col | col |`.
+TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
+# Разделитель таблицы: `| --- | --- |` / `|---|:---:|---|`.
+TABLE_SEPARATOR = re.compile(r"^\s*\|[\s\-:|]+\|\s*$")
+
 # Минимальная транслитерация RU->LAT для осмысленных имён файлов (TZ 7.4).
 _TRANSLIT = {
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
@@ -58,9 +66,20 @@ def parse(text: str) -> list[ImageSlot]:
     lines = text.splitlines()
     slots: list[ImageSlot] = []
     used: set[str] = set()
+    # Накопленные [INLINE_IMAGE:...] между предыдущим маркером и текущим —
+    # станут inline_refs следующего слота.
+    pending_inline: list[str] = []
 
     i = 0
     while i < len(lines):
+        # Inline-картинка из docx (поставлена в article_loader) — кладём
+        # в очередь до следующего маркера Рис.
+        m_img = INLINE_IMAGE_LINE.match(lines[i])
+        if m_img:
+            pending_inline.append(m_img.group(1).strip())
+            i += 1
+            continue
+
         m = MARKER.match(lines[i])
         if not m:
             i += 1
@@ -79,6 +98,21 @@ def parse(text: str) -> list[ImageSlot]:
                     break
                 j += 1  # пустые между маркером и буллетами — пропускаем
                 continue
+            # Markdown-таблица под Рис. → каждая строка как буллет.
+            if TABLE_ROW.match(s) and not bullets:
+                while j < len(lines):
+                    ts = lines[j].strip()
+                    if not TABLE_ROW.match(ts):
+                        break
+                    if TABLE_SEPARATOR.match(ts):
+                        j += 1
+                        continue
+                    cells = [c.strip() for c in ts.strip("|").split("|")]
+                    cells = [c for c in cells if c]
+                    if cells:
+                        bullets.append(" — ".join(cells))
+                    j += 1
+                break  # после таблицы блок закончился
             mb = BULLET_LINE.match(s)
             if mb:
                 b = mb.group(1).strip()
@@ -109,8 +143,11 @@ def parse(text: str) -> list[ImageSlot]:
                 bullets=tuple(bullets),
                 type=slot_type,
                 category=category,
+                inline_refs=tuple(pending_inline),
             )
         )
+        # Очередь inline-картинок сбрасывается после ассоциации со слотом.
+        pending_inline = []
         i = max(j, i + 1)
 
     return slots

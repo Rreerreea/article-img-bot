@@ -394,8 +394,21 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             context.user_data["showing_slot"] = None
             context.user_data["gen_done"] = False
             context.user_data["chat_id"] = chat_msg.chat_id
+            context.user_data["total_slots"] = total
+            context.user_data["shown_count"] = 0  # сколько уже отдано юзеру
 
             async def _send_one(slot_id: str, file_path: Path):
+                context.user_data["shown_count"] = (
+                    context.user_data.get("shown_count", 0) + 1
+                )
+                idx = context.user_data["shown_count"]
+                tot = context.user_data.get("total_slots", total)
+                # На первой картинке подсказываем как двигать дальше.
+                hint = (
+                    " · нажми ✅ ОК для следующей"
+                    if idx == 1 and tot > 1 else ""
+                )
+                caption = f"📄 {slot_id} · {idx} из {tot}{hint}"
                 kb = InlineKeyboardMarkup([[
                     InlineKeyboardButton(
                         "✅ ОК", callback_data=f"slotok:{slot_id}"
@@ -409,7 +422,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                         await chat_msg.reply_document(
                             document=fh,
                             filename=f"{slot_id}.png",
-                            caption=f"📄 {slot_id}",
+                            caption=caption,
                             reply_markup=kb,
                         )
                 except Exception as exc:  # noqa: BLE001
@@ -496,6 +509,11 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
             nxt = queue.pop(0)
             context.user_data["slot_queue"] = queue
             context.user_data["showing_slot"] = nxt["slot_id"]
+            context.user_data["shown_count"] = (
+                context.user_data.get("shown_count", 0) + 1
+            )
+            idx = context.user_data["shown_count"]
+            tot = context.user_data.get("total_slots", idx)
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton(
                     "✅ ОК", callback_data=f"slotok:{nxt['slot_id']}"
@@ -509,7 +527,7 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
                     await chat_msg.reply_document(
                         document=fh,
                         filename=f"{nxt['slot_id']}.png",
-                        caption=f"📄 {nxt['slot_id']}",
+                        caption=f"📄 {nxt['slot_id']} · {idx} из {tot}",
                         reply_markup=kb,
                     )
             except Exception as exc:  # noqa: BLE001
@@ -722,8 +740,35 @@ def build_handlers(cfg: Config, wl: Whitelist) -> dict:
         style_name = _ref_style(update)
         style_label = _ref_style_label(style_name)
         m_label = choice.label
+
+        # Предупреждения по слотам которые скорее всего выйдут плохо.
+        warnings_lines: list[str] = []
+        suspicious_phrases = (
+            "из картинки выше", "с картинки выше", "картинку выше",
+            "картинки выше", "таблицу ниже", "таблицу выше",
+            "референс картинку", "контент с картинки",
+        )
+        for idx, s in enumerate(slots, 1):
+            title_low = s.title.lower()
+            has_inline = bool(getattr(s, "inline_refs", ()))
+            looks_like_ref = any(p in title_low for p in suspicious_phrases)
+            if looks_like_ref and not has_inline:
+                # Текст ссылается на картинку, но мы её не нашли в docx.
+                warnings_lines.append(
+                    f"⚠️ #{idx} «{s.title[:50]}» — текст ссылается на "
+                    "картинку из статьи, но я её не вижу. "
+                    "Вставь её прямо в .docx ПЕРЕД маркером Рис."
+                )
+            if has_inline:
+                warnings_lines.append(
+                    f"📎 #{idx} — есть {len(s.inline_refs)} inline-реф(а) "
+                    "из .docx, использую как референс"
+                )
+        warn_block = ("\n\n" + "\n".join(warnings_lines)) if warnings_lines else ""
+
         await msg.reply_text(
-            f"{est.human()}\n🎨 Стиль: {style_label}\n🤖 Модель: {m_label}",
+            f"{est.human()}\n🎨 Стиль: {style_label}\n🤖 Модель: {m_label}"
+            + warn_block,
             reply_markup=_estimate_kb(len(slots), style_label, m_label),
         )
 

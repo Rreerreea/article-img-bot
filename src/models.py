@@ -46,6 +46,11 @@ class ImageSlot:
     bullets: tuple[str, ...]
     type: SlotType
     category: str | None = None
+    # Картинки-референсы, извлечённые из самого docx прямо ПЕРЕД этим
+    # маркером Рис. (друг кидает в статью «контент-картинку выше + Рис.»).
+    # Worker подмешает их в images.edit как inline-рефы — точнее чем
+    # папка refs/, потому что они per-slot, привязанные к контексту.
+    inline_refs: tuple[str, ...] = ()
 
     def cache_key(self, refs_signature: str = "") -> str:
         """Ключ кэша. Одинаковый блок при тех же рефах не генерится повторно.
@@ -61,6 +66,8 @@ class ImageSlot:
                 self.title,
                 *self.bullets,
                 refs_signature,
+                # inline-рефы тоже влияют на результат
+                *self.inline_refs,
             ]
         )
         return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]

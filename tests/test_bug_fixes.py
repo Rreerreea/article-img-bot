@@ -190,6 +190,77 @@ def test_explicit_story_overrides_many_bullets():
     assert slots[0].type is SlotType.STORY
 
 
+def test_inline_image_marker_associates_with_next_marker(tmp_path):
+    """[INLINE_IMAGE:...] перед Рис. должно попасть в slot.inline_refs."""
+    img_path = tmp_path / "ref.png"
+    img_path.write_bytes(b"fake-png")
+    text = (
+        f"[INLINE_IMAGE:{img_path}]\n\n"
+        "Рис. Тестовый блок\n"
+        "• буллет один\n"
+    )
+    slots = parse(text)
+    assert len(slots) == 1
+    assert slots[0].inline_refs == (str(img_path),)
+
+
+def test_inline_image_resets_after_marker(tmp_path):
+    """Inline image идёт только в ближайший следующий Рис., не в дальнейшие."""
+    img1 = tmp_path / "a.png"; img1.write_bytes(b"a")
+    img2 = tmp_path / "b.png"; img2.write_bytes(b"b")
+    text = (
+        f"[INLINE_IMAGE:{img1}]\n"
+        "Рис. Первый\n"
+        "• X\n\n"
+        f"[INLINE_IMAGE:{img2}]\n"
+        "Рис. Второй\n"
+        "• Y\n"
+    )
+    slots = parse(text)
+    assert len(slots) == 2
+    assert slots[0].inline_refs == (str(img1),)
+    assert slots[1].inline_refs == (str(img2),)
+
+
+def test_markdown_table_becomes_bullets():
+    """Под Рис. таблица `| col | col |` парсится как буллеты «col — col»."""
+    text = (
+        "Рис. Сравнение\n"
+        "| Токен | Капитализация |\n"
+        "| --- | --- |\n"
+        "| BTC | $1T |\n"
+        "| ETH | $400B |\n"
+    )
+    slots = parse(text)
+    assert len(slots) == 1
+    assert len(slots[0].bullets) >= 3  # header + 2 строки данных
+    assert "BTC" in slots[0].bullets[1] and "$1T" in slots[0].bullets[1]
+
+
+def test_html_to_flat_extracts_table_and_images():
+    """HTML mode сохраняет таблицы и встраивает картинки как маркеры."""
+    from src.article_loader import _html_to_flat
+    import base64
+    # Маленькая 1x1 PNG.
+    png_bytes = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+        "89000000017352474200aece1ce90000000d49444154789c63000000000200"
+        "017395790b0000000049454e44ae426082"
+    )
+    b64 = base64.b64encode(png_bytes).decode()
+    html = (
+        '<p>Текст до</p>'
+        f'<p><img src="data:image/png;base64,{b64}"/></p>'
+        '<p>Рис. Тест</p>'
+        '<table><tr><th><p>A</p></th><th><p>B</p></th></tr>'
+        '<tr><th><p>1</p></th><th><p>2</p></th></tr></table>'
+    )
+    out = _html_to_flat(html)
+    assert "[INLINE_IMAGE:" in out
+    assert "| A | B |" in out
+    assert "| 1 | 2 |" in out
+
+
 def test_custom_category_does_not_force_type():
     """Кастомная категория `[characters]` сама по себе не меняет тип —
     только подтягивает свою папку рефов. С 2 буллетами — STORY (default)."""

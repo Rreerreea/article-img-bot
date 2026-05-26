@@ -342,17 +342,28 @@ class HiggsfieldWorker:
     async def _generate_openai(self, spec: PromptSpec) -> bytes:
         """OpenAI GPT Image 2.
 
-        Если в папке рефов есть картинки — идём через images.edit с
-        ними как стилистическими примерами (модель видит визуал).
-        Если рефов нет — обычный images.generate (только текст).
-        Размер из доступных OpenAI; postprocess приводит к target.
+        Приоритет рефов:
+        1. spec.inline_refs (картинки из самого docx → точнее всего по контексту слота)
+        2. spec.refs_dir (картинки из папки refs/<категория>/ → общий стиль)
+        Если ничего нет — обычный images.generate (только текст).
         """
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI(api_key=self.cfg.openai_api_key or None)
         size = "1536x1024" if spec.aspect_ratio == "16:9" else "1024x1024"
 
-        refs = self._load_ref_payloads(spec.refs_dir, limit=4)
+        refs: list = []
+        # Inline-рефы first.
+        if spec.inline_refs:
+            refs = self._load_ref_payloads_from_paths(
+                list(spec.inline_refs), limit=4
+            )
+        # Дополним рефами из папки, если место осталось.
+        if len(refs) < 4:
+            folder_refs = self._load_ref_payloads(
+                spec.refs_dir, limit=4 - len(refs)
+            )
+            refs = refs + folder_refs
         if refs:
             resp = await client.images.edit(
                 model=self.cfg.openai_model,
@@ -397,6 +408,31 @@ class HiggsfieldWorker:
                 out.append((f.name, f.read_bytes(), mime[ext]))
                 if len(out) >= limit:
                     break
+        return out
+
+    @staticmethod
+    def _load_ref_payloads_from_paths(paths: list, limit: int = 4) -> list:
+        """То же что _load_ref_payloads, но из конкретного списка путей.
+        Используется для inline-рефов из docx (там пути per-slot, не папка)."""
+        from pathlib import Path
+
+        mime = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+        }
+        out: list = []
+        for p in paths:
+            f = Path(p)
+            if not f.is_file():
+                continue
+            ext = f.suffix.lower()
+            if ext not in mime:
+                continue
+            out.append((f.name, f.read_bytes(), mime[ext]))
+            if len(out) >= limit:
+                break
         return out
 
     # ---- Krea API (Flux Pro, Nano Banana Pro, Ideogram 3.0) --------------

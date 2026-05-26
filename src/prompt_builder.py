@@ -82,6 +82,10 @@ class PromptSpec:
     target_size: tuple[int, int]
     refs_dir: Path
     refs_signature: str
+    # Inline-картинки из самого docx, привязанные к этому слоту (друг
+    # вставляет «контент-картинку выше» + Рис.). Worker подмешает их в
+    # images.edit как inline-рефы. Имеют ПРИОРИТЕТ над refs_dir.
+    inline_refs: tuple[Path, ...] = ()
 
 
 def refs_dir_for(slot, base_refs_dir: Path) -> Path:
@@ -212,18 +216,27 @@ def build(
             # Битый файл (кодировка, перм) — просто игнорируем, не валим
             # генерацию. Свежий .style.txt от бота всегда utf-8.
             style_desc = ""
-    # Есть ли реальные картинки-рефы в этой папке.
+    # Inline-рефы (из самого docx) и/или картинки в папке refs/<cat>/.
     img_exts = {".png", ".jpg", ".jpeg", ".webp"}
-    has_refs = folder.is_dir() and any(
+    inline_refs = tuple(
+        Path(p) for p in getattr(slot, "inline_refs", ()) if Path(p).is_file()
+    )
+    has_folder_refs = folder.is_dir() and any(
         f.is_file() and f.suffix.lower() in img_exts
         for f in folder.iterdir()
     )
+    has_refs = bool(inline_refs) or has_folder_refs
     sig = refs_signature(folder)
-    # Версия .style.txt влияет на сигнатуру → смена описания → перегенерация.
+    # Версия .style.txt + inline-картинки → сигнатура для кэша.
+    extras = []
     if style_desc:
+        extras.append(style_desc)
+    for ip in inline_refs:
+        extras.append(f"{ip.name}:{ip.stat().st_size}")
+    if extras:
         import hashlib
         sig = hashlib.sha1(
-            (sig + "|" + style_desc).encode("utf-8")
+            (sig + "|" + "|".join(extras)).encode("utf-8")
         ).hexdigest()[:16]
     return PromptSpec(
         prompt=build_prompt(
@@ -233,4 +246,5 @@ def build(
         target_size=TARGET_SIZE[slot.type],
         refs_dir=folder,
         refs_signature=sig,
+        inline_refs=inline_refs,
     )
