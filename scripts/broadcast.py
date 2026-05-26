@@ -66,6 +66,14 @@ async def _send(chat_id: int, token: str, text: str) -> bool:
         return False
 
 
+def _read_version() -> str:
+    """Версия из VERSION в корне репо. Шапка ‹Релиз X.Y› в broadcast."""
+    vf = ROOT / "VERSION"
+    if vf.is_file():
+        return vf.read_text(encoding="utf-8").strip()
+    return ""
+
+
 async def main():
     if len(sys.argv) < 2:
         log.error("Usage: python -m scripts.broadcast <text_file|->")
@@ -73,13 +81,17 @@ async def main():
 
     src = sys.argv[1]
     if src == "-":
-        text = sys.stdin.read()
+        body = sys.stdin.read()
     else:
-        text = Path(src).read_text(encoding="utf-8")
-    text = text.strip()
-    if not text:
+        body = Path(src).read_text(encoding="utf-8")
+    body = body.strip()
+    if not body:
         log.error("Пустое сообщение — нечего слать.")
         sys.exit(1)
+
+    # Шапка с версией. Без VERSION файла — без шапки.
+    version = _read_version()
+    text = f"🎉 Релиз {version}\n\n{body}" if version else body
 
     # Загружаем .env (где TELEGRAM_TOKEN)
     try:
